@@ -31,11 +31,17 @@
 ##################
 # JobControl
 #
-#   JobType - DMSBasic
+#   JobName - A string that identifies the job to a human
+#
+#   JobType - Basic
 #
 #   JobSpecVersion - Currently 1.0
 #
 #   Status - Pending, Running, Partial, Complete
+#
+#   DateRequested - In the format "yyyy:mm:dd hh:mm:ss"
+#
+#   Email - Email to a human who may be interested
 #
 #   SaveNetState - True/False
 #
@@ -45,25 +51,11 @@
 #
 #   ResultReturnAddress - emailAdddr
 #
-#   ResultNotifyMechanism - { email, text, file, socket, ... }
+#   Debug - True/False, defaults to False
 #
-#   ResultNotifyPolicy - { onFinal, progressUpdates }
+#   StressTest - True/False, defaults to False
 #
-#   ResultNotifyAddress - { emailAddr }
-#
-#   DateRequested - In the format "yyyy:mm:dd hh:mm:ss"
-#
-#   Requestor - User-readable name of the person who requested the file
-#
-#   Email - Email to a human who may be interested
-#
-#   x_BailOut - { BeforeInit, AfterInit, AfterTrain
-#
-#   x_Debug - Number between 0..5 where 0 means no debugging.
-#
-#   x_StressTest - True/False
-#
-#   x_PerfProfile - True/False
+#   PerfProfile - True/False, defaults to False
 #
 ##################
 # Data
@@ -85,32 +77,56 @@
 #       TinyRNN
 #       LSTM
 #
+#   NonLinearType
+#       LogSoftmax
+#
 #   LossFunction
 #       NLLLoss
 #       BCELoss
 #
-#   NonLinearType
-#       LogSoftmax
-#
 #   Optimizer
 #       SGD
+#
+#   LearningRate
 #
 #   HiddenLayerSize
 #
 #   NumEpochs
 #
-#   InputValues - A comma-separated list of variables, like "Age,Cr,SBP". See the TDFTools.py documentation.
-#   ResultValue - A variable name. See the TDFTools.py documentation.
+#   InputValues - A comma-separated list of variables, like "Age,Cr,SBP". 
+#       See the TDFTools.py documentation for a list of defined names.
+#       The value name appeats in a <D> element. 
+#       For example, Hgb would extract data from the following <D> element:
+#           <D C="L" T="100:10:30">Hgb=7.0,</D>
 #
-#   ResultValueType - The data type of the output variable.
-#       BinaryDiagnosis - A number 0-1
-#       FutureEventClass - A number 0-11. See the TDFTools.py documentation.
+#       Each value may be followed by an offset in brackets
+#       Examples: Cr[-1]   INR[next]
+#       The number in brackets is the number of days from the current point in the timeline.
+#       The offset "next" means the next occurrence.    
+# 
+#       The special value "Dose" is always followed by a "/" and then the name of a medication.
+#       For example Dose/Coumadin is the dose of Coumadin given.
+#       Doses may also have offsets. For example Dose/Coumadin[-1] is the dose of Coumadin given 1 day before.
+# 
+#   ResultValue - A variable name. See the TDFTools.py documentation.
+#       Different variables have different interpretations as result values.
+#       These include:
+#           Number - A numeric value, which may be a dose or a lab value
+#           FutureEventClass - A number 0-11. See the TDFTools.py documentation.
+#           Binary - A number 0-1
+#
+#       FutureEventClass or BinaryDiagnosis will count the number of exact matches; the 
+#           predicted class must exactly match the actual value.
+#
+#       Number will count buckets:
+#           Exact (to 1 decimal place)
+#           Within 2%
+#           Within 5%
+#           Within 10%
+#           Within 25%
 #
 #   WindowStartEvent
-#
 #   WindowStopEvent
-#
-#   PredictionGroup - "Window" or "Sample"
 #
 #   ClipNumTrainPatients - Used only for debugging
 #   ClipNumTestPatients - Used only for debugging
@@ -122,8 +138,6 @@
 #
 ##################
 # Results
-#
-#   VariantIndex
 #
 #   StartRequestTimeStr
 #
@@ -140,6 +154,10 @@
 #   NumSequencesTested
 #
 #   NumCorrectPredictionsInTesting
+#   NumPredictionsWithin2PercentInTesting
+#   NumPredictionsWithin5PercentInTesting
+#   NumPredictionsWithin10PercentInTesting
+#   NumPredictionsWithin20PercentInTesting
 #
 #   TrainAvgLossPerEpoch
 #
@@ -147,29 +165,15 @@
 #
 #   TestNumItemsPerClass
 #
-#   Only used for binary results.
-#       NumTrueNegativesInTraining
-#       NumFalsePositivesInTraining
-#       NumFalseNegativesInTraining
-#       NumTruePositivesInTraining
-#
-#       NumTrueNegativesInTesting
-#       NumFalsePositivesInTesting
-#       NumFalseNegativesInTesting
+#   Used for binary and class results.
 #       NumTruePositivesInTesting
+#       NumFalsePositivesInTesting
+#       NumTrueNegativesInTesting
+#       NumFalseNegativesInTesting
 #
 #   OS
 #   CPU
 #   GPU
-#
-##################
-# TestList
-#
-#   A list of test elements, each of thich can contain different inputs and outputs.
-#   This is very unstructured, and its use depends on the individual tests.
-#
-##################
-# ExpectedResults
 #
 ##################
 # Runtime
@@ -187,52 +191,104 @@
 #   This is similar to NeuralNetMatrixListXMLNode, except it holds the gradients resulting 
 #   from a series of training steps. This is the return value of a remote training session.
 #
+##################
+# TestList
+#
+#   A list of test elements, each of thich can contain different inputs and outputs.
+#   This is very unstructured, and its use depends on the individual tests.
+#
 #####################################################################################
 #Example:
 #
-#<MLJob>
-#</MLJob>
-#
+# <?xml version="1.0" ?>
+# <MLJob>
+#     <JobControl>
+#         <JobName>myJov</JobName>
+#         <JobType>Basic</JobType>
+#         <JobSpecVersion>1.0</JobSpecVersion>
+#         <Status>Pending</Status>
+#         <DateRequested>2020:09:13</DateRequested>
+#         <Email>dfdean3@gmail.com</Email>
+#         <ResultReturnMechanism>email</ResultReturnMechanism>
+#         <ResultReturnAddress>foo@emailAddress.com</ResultReturnAddress>
+#         <SaveNetState>True</SaveNetState>
+#         <Debug>True</Debug>
+#         <StressTest>False</StressTest>
+#         <PerfProfile>False</PerfProfile>
+#     </JobControl>
+# 
+#     <Data>
+#         <DataFormat>TDF</DataFormat>
+#         <StoreType>File</StoreType>
+#         <TrainData>/home/ddean/dLargeData/mlData/UKData/UKHospitalOutcomesTrain.tdf</TrainData>
+#         <TestData>/home/ddean/dLargeData/mlData/UKData/UKHospitalOutcomesTest.tdf</TestData>
+#     </Data>
+# 
+#     <Request>
+#         <NetworkType>SimpleNet</NetworkType>
+#         <NonLinearType>LogSoftmax</NonLinearType>
+#         <LossFunction>NLLLoss</LossFunction>
+#         <Optimizer>SGD</Optimizer>
+#         <LearningRate>0.01</LearningRate>
+# 
+#         <NumEpochs>1</NumEpochs>
+#         <ClipNumTrainPatients>100</ClipNumTrainPatients>
+#         <ClipNumTestPatients>100</ClipNumTestPatients>
+# 
+#         <WindowStartEvent></WindowStartEvent>
+#         <WindowStopEvent></WindowStopEvent>
+# 
+#         <InputValues>Dose/Coumadin,INR,Dose/Coumadin[-1],INR[-1],Dose/Coumadin[-3],INR[-3]</InputValues>
+# 
+#         <ResultValue>INR[next]</ResultValue>
+#     </Request>
+# 
+#     <ResultList>
+#     </ResultList>
+# 
+#     <TestList>
+#     </TestList>
+# 
+# </MLJob>
+# 
 #####################################################################################
 
 import os
 import sys
-import shutil
 import string
 import time
+import re
 from datetime import datetime
-from time import gmtime, strftime
 import platform
 import numpy
 
 # Normally we have to set the search path to load these.
 # But, this .py file is always in the same directories as these imported modules.
 from xmlTools import *
-#from ddToolsLib import *
-from testUtils import *
-from tdfTools import *
+from tdfTools import *  # Needed for constants.
 
 import xml.dom
 import xml.dom.minidom
-from xml.dom.minidom import parse, parseString
-from xml.dom.minidom import getDOMImplementation
+from xml.dom.minidom import parse, parseString, getDOMImplementation
 
 NEWLINE_STR = "\n"
-MLJOB_SINGLE_INDENT_STR = "    "
+RESULT_SECTION_SEPARATOR_STR = "-------------------------"
 
 MLJOB_LOG_NODE_ELEMENT_NAME = "Log"
 
-#TDF_NUM_CATEGORIES_IN_FUTURE_VAL = 14
+ML_JOB_NUM_NUMERIC_VALUE_BUCKETS = 20
+
+
 
 ################################################################################
 #
-# [MLJob_Log]
+# [MLJobLowLevelLogImpl]
 #
+# This is only called when there is not a valid job object to log to.
 ################################################################################
-def MLJob_Log(message):
-    return
-# End - MLJob_Log
-
+def MLJobLowLevelLogImpl(message):
+    print(message)
+# End - MLJobLowLevelLogImpl
 
 
 
@@ -252,11 +308,9 @@ class MLJob():
         self.RootXMLNode = None
         self.JobControlXMLNode = None
         self.DataXMLNode = None
-        self.OriginalRequestXMLNode = None
-        self.CurrentRequestXMLNode = None
-        self.ResultsListXMLNode = None
+        self.RequestXMLNode = None
+        self.ResultsXMLNode = None
         self.RuntimeXMLNode = None
-        self.ExpectedResultsXMLNode = None
         self.TestListXMLNode = None
         self.NeuralNetMatrixListXMLNode = None
         self.NeuralNetGradientListXMLNode = None
@@ -296,20 +350,14 @@ class MLJob():
         self.DataXMLNode = self.JobXMLDOM.createElement("Data")
         self.RootXMLNode.appendChild(self.DataXMLNode)
 
-        self.OriginalRequestXMLNode = self.JobXMLDOM.createElement("Request")
-        self.RootXMLNode.appendChild(self.OriginalRequestXMLNode)
+        self.RequestXMLNode = self.JobXMLDOM.createElement("Request")
+        self.RootXMLNode.appendChild(self.RequestXMLNode)
 
-        self.RequestVariantList = self.JobXMLDOM.createElement("RequestVariantList")
-        self.RootXMLNode.appendChild(self.RequestVariantList)
-
-        self.ResultsListXMLNode = self.JobXMLDOM.createElement("ResultList")
-        self.RootXMLNode.appendChild(self.ResultsListXMLNode)
+        self.ResultsXMLNode = self.JobXMLDOM.createElement("Results")
+        self.RootXMLNode.appendChild(self.ResultsXMLNode)
 
         self.RuntimeXMLNode = self.JobXMLDOM.createElement("Runtime")
         self.RootXMLNode.appendChild(self.RuntimeXMLNode)
-
-        self.ExpectedResultsXMLNode = self.JobXMLDOM.createElement("ExpectedResults")
-        self.RootXMLNode.appendChild(self.ExpectedResultsXMLNode)
 
         self.TestListXMLNode = self.JobXMLDOM.createElement("TestList")
         self.RootXMLNode.appendChild(self.TestListXMLNode)
@@ -319,6 +367,11 @@ class MLJob():
 
         self.NeuralNetGradientListXMLNode = self.JobXMLDOM.createElement("NeuralNetGradientList")
         self.RootXMLNode.appendChild(self.NeuralNetGradientListXMLNode)
+
+        self.ResultValueType = TDF_DATA_TYPE_FLOAT
+        self.MinNumberResultVal = 0
+        self.MaxNumberResultVal = 0
+        self.ResultNumberBucketSize = 1.0
     # End of InitNewJobImpl
 
 
@@ -333,26 +386,29 @@ class MLJob():
     def ReadJobFromString(self, jobString):
         #print("MLJob::ReadJobFromString")
 
+        ###############
         # Parse the text string into am XML DOM
         try:
             self.JobXMLDOM = parseString(jobString)
         except xml.parsers.expat.ExpatError as err:
-            MLJob_Log("MLJob::ReadJobFromString. Error from parsing string:")
-            MLJob_Log("[" + jobString + "]")
-            MLJob_Log("ExpatError:" + str(err))
+            MLJobLowLevelLogImpl("MLJob::ReadJobFromString. Error from parsing string:")
+            MLJobLowLevelLogImpl("ExpatError:" + str(err))
+            MLJobLowLevelLogImpl("Job=[" + jobString + "]")
             return
         except:
-            MLJob_Log("MLJob::ReadJobFromString. Error from parsing string:")
-            MLJob_Log("[" + jobString + "]")
-            MLJob_Log("Unexpected error:", sys.exc_info()[0])
+            MLJobLowLevelLogImpl("MLJob::ReadJobFromString. Error from parsing string:")
+            MLJobLowLevelLogImpl("Job=[" + jobString + "]")
+            MLJobLowLevelLogImpl("Unexpected error:", sys.exc_info()[0])
             return
 
+        ###############
         try:
             self.RootXMLNode = self.JobXMLDOM.getElementsByTagName("MLJob")[0]
         except:
-            MLJob_Log("MLJob::ReadJobFromString. Required elements are missing: [" + jobString + "]")
+            MLJobLowLevelLogImpl("MLJob::ReadJobFromString. Required elements are missing: [" + jobString + "]")
             return
 
+        ###############
         try:
             self.JobControlXMLNode = self.JobXMLDOM.getElementsByTagName("JobControl")[0]
         except:
@@ -360,6 +416,7 @@ class MLJob():
             self.JobControlXMLNode = self.JobXMLDOM.createElement("JobControl")
             self.RootXMLNode.appendChild(self.JobControlXMLNode)
 
+        ###############
         try:
             self.DataXMLNode = self.JobXMLDOM.getElementsByTagName("Data")[0]
         except:
@@ -367,27 +424,23 @@ class MLJob():
             self.DataXMLNode = self.JobXMLDOM.createElement("Data")
             self.RootXMLNode.appendChild(self.DataXMLNode)
 
+        ###############
         try:
-            self.OriginalRequestXMLNode = self.JobXMLDOM.getElementsByTagName("Request")[0]
+            self.RequestXMLNode = self.JobXMLDOM.getElementsByTagName("Request")[0]
         except:
             # If this is missing, then create it.
-            self.OriginalRequestXMLNode = self.JobXMLDOM.createElement("Request")
-            self.RootXMLNode.appendChild(self.OriginalRequestXMLNode)
+            self.RequestXMLNode = self.JobXMLDOM.createElement("Request")
+            self.RootXMLNode.appendChild(self.RequestXMLNode)
 
+        ###############
         try:
-            self.RequestVariantList = self.JobXMLDOM.getElementsByTagName("RequestVariantList")[0]
+            self.ResultsXMLNode = self.JobXMLDOM.getElementsByTagName("Results")[0]
         except:
             # If this is missing, then create it.
-            self.RequestVariantList = self.JobXMLDOM.createElement("RequestVariantList")
-            self.RootXMLNode.appendChild(self.RequestVariantList)
+            self.ResultsXMLNode = self.JobXMLDOM.createElement("Results")
+            self.RootXMLNode.appendChild(self.ResultsXMLNode)
 
-        try:
-            self.ResultsListXMLNode = self.JobXMLDOM.getElementsByTagName("ResultList")[0]
-        except:
-            # If this is missing, then create it.
-            self.ResultsListXMLNode = self.JobXMLDOM.createElement("ResultList")
-            self.RootXMLNode.appendChild(self.ResultsListXMLNode)
-
+        ###############
         try:
             self.RuntimeXMLNode = self.JobXMLDOM.getElementsByTagName("Runtime")[0]
         except:
@@ -395,13 +448,7 @@ class MLJob():
             self.RuntimeXMLNode = self.JobXMLDOM.createElement("Runtime")
             self.RootXMLNode.appendChild(self.RuntimeXMLNode)
 
-        try:
-            self.ExpectedResultsXMLNode = self.JobXMLDOM.getElementsByTagName("ExpectedResults")[0]
-        except:
-            # If this is missing, then create it.
-            self.ExpectedResultsXMLNode = self.JobXMLDOM.createElement("ExpectedResults")
-            self.RootXMLNode.appendChild(self.ExpectedResultsXMLNode)
-
+        ###############
         try:
             self.TestListXMLNode = self.JobXMLDOM.getElementsByTagName("TestList")[0]
         except:
@@ -409,6 +456,7 @@ class MLJob():
             self.TestListXMLNode = self.JobXMLDOM.createElement("TestList")
             self.RootXMLNode.appendChild(self.TestListXMLNode)
 
+        ###############
         try:
             self.NeuralNetMatrixListXMLNode = self.JobXMLDOM.getElementsByTagName("NeuralNetMatrixList")[0]
         except:
@@ -416,6 +464,7 @@ class MLJob():
             self.NeuralNetMatrixListXMLNode = self.JobXMLDOM.createElement("NeuralNetMatrixList")
             self.RootXMLNode.appendChild(self.NeuralNetMatrixListXMLNode)
 
+        ###############
         try:
             self.NeuralNetGradientListXMLNode = self.JobXMLDOM.getElementsByTagName("NeuralNetGradientList")[0]
         except:
@@ -424,25 +473,29 @@ class MLJob():
             self.RootXMLNode.appendChild(self.NeuralNetGradientListXMLNode)
 
 
-        # Optionally, read any runtime if it is present.
-        # This is only used when sending jobs between a dispatcher process and a
-        # child worker process, and is not normally stored in a file. It could
-        # be saved to a file if we ever want to "suspend" runtime state and
-        # resume it at a later date, but that is not supported now and would
-        # raise some tricky synchronization issues.
+        self.DebugMode = False
+        xmlNode = XMLTools_GetChildNode(self.JobControlXMLNode, "DebugMode")
+        if (xmlNode != None):
+            resultStr = XMLTools_GetTextContents(xmlNode)
+            resultStr = resultStr.lower()
+            resultStr = resultStr.lstrip()
+            if ((resultStr == "on") or (resultStr == "true") or (resultStr == "yes") or (resultStr == "1")):
+                self.DebugMode = True
+
+        # Optionally, read any runtime if it is present. No error if it is missing.
         #
-        # This is optional. No error if it is missing.
+        # This is used when 
+        # 1. Sending jobs between a dispatcher process and a child worker process
+        #    In this case, it is not normally stored in a file. 
+        #
+        # 2. Using a pre-trained neural network to make a prediction on some new data.
+        #
+        # 3. To "suspend" runtime state and resume it at a later date.
+        #    This is not supported now and would raise some tricky synchronization issues.
         self.ReadRuntimeFromXML(self.RuntimeXMLNode)
 
-        self.DebugMode = False
-        if (self.CurrentRequestXMLNode != None):
-            xmlNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, "DebugMode")
-            if (xmlNode != None):
-                resultStr = XMLTools_GetTextContents(xmlNode).lower()
-                if ((resultStr == "on") or (resultStr == "true") or (resultStr == "yes") or (resultStr == "1")):
-                    self.DebugMode = True
-
-        self.SelectFirstRequestVariant()
+        # Figure out the result value type.
+        self.GetResultInfoImpl()
     # End of ReadJobFromString
 
 
@@ -456,10 +509,10 @@ class MLJob():
     #
     #####################################################
     def WriteJobToString(self, fIncludeRuntime):
-        # Optionally, write the current runtime to a remporary node that is just used for 
+        # Optionally, write the current runtime to a temporary node that is just used for 
         # holding an incomplete request that is currently executing
         #
-        # This is only used when sending jobs between a dispatcher process and a
+        # This is used when sending jobs between a dispatcher process and a
         # child worker process, and is not normally stored in a file. It could
         # be saved to a file if we ever want to "suspend" runtime state and
         # resume it at a later date, but that is not supported now and would
@@ -471,10 +524,20 @@ class MLJob():
                 self.RuntimeXMLNode = self.JobXMLDOM.createElement("Runtime")
                 self.RootXMLNode.appendChild(self.RuntimeXMLNode)
             self.SaveRuntimeToXML(self.RuntimeXMLNode)
+        # End - if (fIncludeRuntime):
 
-        resultStr = self.JobXMLDOM.toprettyxml(indent=" ", newl="\n", encoding=None)
+        # Don't add indentation or newlines. Those accumulate each time
+        # the XML is serialized/deserialized, so for a large job the whitespace
+        # grows to dwarf the actual content.        
+        resultStr = self.JobXMLDOM.toprettyxml(indent="", newl="", encoding=None)
+        #resultStr = resultStr.replace("\n", "")
+        #resultStr = resultStr.replace("\r", "")
+        #resultStr = resultStr.replace("   ", "")
+        #resultStr = resultStr.replace("  ", "")
+
         return resultStr
     # End of WriteJobToString
+
 
 
 
@@ -489,39 +552,45 @@ class MLJob():
         self.StartRequestTimeInSeconds = 0
         self.StopRequestTimeStr = ""
         self.StopRequestTimeInSeconds = 0
+        self.StartTrainingTimeStr = ""
+        self.StopTrainingTimeStr = ""
+        self.StartTestingTimeStr = ""
+        self.StopTestingTimeStr = ""
 
         self.CurrentEpochNum = 0
         self.NumSequencesTrainedPerEpoch = 0
         self.NumSequencesTested = 0
 
-        self.AvgLossPerEpochList = []
         self.TotalTrainingLossInCurrentEpoch = 0.0
-        #print("ResetRuntimeStateImpl. self.TotalTrainingLossInCurrentEpoch=" + str(self.TotalTrainingLossInCurrentEpoch))
+        self.AvgLossPerEpochList = []
+
         self.NumCorrectPredictionsInTesting = 0
+        self.NumPredictionsWithin2PercentInTesting = 0
+        self.NumPredictionsWithin5PercentInTesting = 0
+        self.NumPredictionsWithin10PercentInTesting = 0
+        self.NumPredictionsWithin20PercentInTesting = 0
 
         self.TrainNumItemsPerClass = []
         self.TestNumItemsPerClass = []
 
-        self.NumTrueNegativesInTraining = 0
-        self.NumFalsePositivesInTraining = 0
-        self.NumFalseNegativesInTraining = 0
-        self.NumTruePositivesInTraining = 0
-
-        self.NumTrueNegativesInTesting = 0
-        self.NumFalsePositivesInTesting = 0
-        self.NumFalseNegativesInTesting = 0
-        self.NumTruePositivesInTesting = 0
+        self.NumTruePositivesInTesting = []
+        self.NumFalsePositivesInTesting = []
+        self.NumTrueNegativesInTesting = []
+        self.NumFalseNegativesInTesting = []
 
         self.BufferedLogLines = ""
 
         self.DebugMode = False
-        if (self.CurrentRequestXMLNode != None):
-            xmlNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, "DebugMode")
-            if (xmlNode != None):
-                resultStr = XMLTools_GetTextContents(xmlNode).lower()
-                if ((resultStr == "on") or (resultStr == "true") or (resultStr == "yes") or (resultStr == "1")):
-                    self.DebugMode = True
+        xmlNode = XMLTools_GetChildNode(self.JobControlXMLNode, "DebugMode")
+        if (xmlNode != None):
+            resultStr = XMLTools_GetTextContents(xmlNode)
+            resultStr = resultStr.lower()
+            resultStr = resultStr.lstrip()
+            if ((resultStr == "on") or (resultStr == "true") or (resultStr == "yes") or (resultStr == "1")):
+                self.DebugMode = True
     # End -  ResetRuntimeStateImpl
+
+
 
 
 
@@ -558,6 +627,22 @@ class MLJob():
         except:
             pass
         try:
+            self.StartTrainingTimeStr = XMLTools_GetChildNodeText(parentXMLNode, "StartTrainingTimeStr")
+        except:
+            pass
+        try:
+            self.StopTrainingTimeStr = XMLTools_GetChildNodeText(parentXMLNode, "StopTrainingTimeStr")
+        except:
+            pass
+        try:
+            self.StartTestingTimeStr = XMLTools_GetChildNodeText(parentXMLNode, "StartTestingTimeStr")
+        except:
+            pass
+        try:
+            self.StopTestingTimeStr = XMLTools_GetChildNodeText(parentXMLNode, "StopTestingTimeStr")
+        except:
+            pass
+        try:
             self.CurrentEpochNum = int(XMLTools_GetChildNodeText(parentXMLNode, "CurrentEpochNum"))
         except:
             pass
@@ -569,20 +654,16 @@ class MLJob():
             self.NumSequencesTested = int(XMLTools_GetChildNodeText(parentXMLNode, "NumSequencesTested"))
         except:
             pass
+
         try:
-            self.NumCorrectPredictionsInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumCorrectPredictionsInTesting"))
+            self.TotalTrainingLossInCurrentEpoch = float(XMLTools_GetChildNodeText(parentXMLNode, "TotalTrainingLossInCurrentEpoch"))
         except:
             pass
 
-        try:
-            self.TotalTrainingLossInCurrentEpoch = float(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "TotalTrainingLossInCurrentEpoch"))
-        except:
-            pass
-        #print("ReadJobFromString. self.TotalTrainingLossInCurrentEpoch=" + str(self.TotalTrainingLossInCurrentEpoch))
 
-
-        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TrainAvgLossPerEpoch")
+        #################
         self.AvgLossPerEpochList = []
+        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TrainAvgLossPerEpoch")
         resultArray = resultStr.split(",")
         for avgLossStr in resultArray:
             try:
@@ -592,9 +673,36 @@ class MLJob():
             except:
                 continue
 
+        #################
+        self.NumCorrectPredictionsInTesting = 0
+        self.NumPredictionsWithin2PercentInTesting = 0
+        self.NumPredictionsWithin5PercentInTesting = 0
+        self.NumPredictionsWithin10PercentInTesting = 0
+        self.NumPredictionsWithin20PercentInTesting = 0
+        try:
+            self.NumCorrectPredictionsInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumCorrectPredictionsInTesting"))
+        except:
+            pass
+        try:
+            self.NumPredictionsWithin2PercentInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumPredictionsWithin2PercentInTesting"))
+        except:
+            pass
+        try:
+            self.NumPredictionsWithin5PercentInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumPredictionsWithin5PercentInTesting"))
+        except:
+            pass
+        try:
+            self.NumPredictionsWithin10PercentInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumPredictionsWithin10PercentInTesting"))
+        except:
+            pass
+        try:
+            self.NumPredictionsWithin20PercentInTesting = int(XMLTools_GetChildNodeText(parentXMLNode, "NumPredictionsWithin20PercentInTesting"))
+        except:
+            pass
 
-        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TrainNumItemsPerClass")
+        #################
         self.TrainNumItemsPerClass = []
+        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TrainNumItemsPerClass")
         countArray = resultStr.split(",")
         for numItems in countArray:
             try:
@@ -602,9 +710,9 @@ class MLJob():
             except:
                 continue
 
-
-        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TestNumItemsPerClass")
+        #################
         self.TestNumItemsPerClass = []
+        resultStr = XMLTools_GetChildNodeText(parentXMLNode, "TestNumItemsPerClass")
         countArray = resultStr.split(",")
         for numItems in countArray:
             try:
@@ -612,45 +720,66 @@ class MLJob():
             except:
                 continue
 
-
+        #################
+        self.NumTruePositivesInTesting = []
         try:
-            self.NumTrueNegativesInTraining = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumTrueNegativesInTraining"))
-        except:
-            pass
-        try:
-            self.NumFalsePositivesInTraining = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumFalsePositivesInTraining"))
-        except:
-            pass
-        try:
-            self.NumFalseNegativesInTraining = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumFalseNegativesInTraining"))
-        except:
-            pass
-        try:
-            self.NumTruePositivesInTraining = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumTruePositivesInTraining"))
+            resultStr = XMLTools_GetChildNodeText(parentXMLNode, "NumTruePositivesInTesting")
+            countArray = resultStr.split(",")
+            for numItems in countArray:
+                try:
+                    self.NumTruePositivesInTesting.append(int(numItems))
+                except:
+                    continue
         except:
             pass
 
+        #################
+        self.NumFalseNegativesInTesting = []
         try:
-            self.NumTrueNegativesInTesting = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumTrueNegativesInTesting"))
+            resultStr = XMLTools_GetChildNodeText(parentXMLNode, "NumFalseNegativesInTesting")
+            countArray = resultStr.split(",")
+            for numItems in countArray:
+                try:
+                    self.NumFalseNegativesInTesting.append(int(numItems))
+                except:
+                    continue
         except:
             pass
+
+        #################
+        self.NumTrueNegativesInTesting = []
         try:
-            self.NumFalsePositivesInTesting = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumFalsePositivesInTesting"))
+            resultStr = XMLTools_GetChildNodeText(parentXMLNode, "NumTrueNegativesInTesting")
+            countArray = resultStr.split(",")
+            for numItems in countArray:
+                try:
+                    self.NumTrueNegativesInTesting.append(int(numItems))
+                except:
+                    continue
         except:
             pass
+
+        #################
+        self.NumFalsePositivesInTesting = []
         try:
-            self.NumFalseNegativesInTesting = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumFalseNegativesInTesting"))
+            resultStr = XMLTools_GetChildNodeText(parentXMLNode, "NumFalsePositivesInTesting")
+            countArray = resultStr.split(",")
+            for numItems in countArray:
+                try:
+                    self.NumFalsePositivesInTesting.append(int(numItems))
+                except:
+                    continue
         except:
             pass
+
+
+        #################
         try:
-            self.NumTruePositivesInTesting = int(XMLTools_GetChildNodeText(self.RuntimeXMLNode, "NumTruePositivesInTesting"))
-        except:
-            pass
-        try:
-            self.BufferedLogLines = XMLTools_GetChildNodeText(self.RuntimeXMLNode, MLJOB_LOG_NODE_ELEMENT_NAME)
+            self.BufferedLogLines = XMLTools_GetChildNodeText(parentXMLNode, MLJOB_LOG_NODE_ELEMENT_NAME)
         except:
             pass
     # End - ReadRuntimeFromXML
+
 
 
 
@@ -664,71 +793,108 @@ class MLJob():
     def SaveRuntimeToXML(self, parentXMLNode):
         XMLTools_RemoveAllChildNodes(parentXMLNode)
 
-        XMLTools_AddChildNodeWithText(parentXMLNode, "VariantIndex", str(0))
-
         XMLTools_AddChildNodeWithText(parentXMLNode, "StartRequestTimeStr", str(self.StartRequestTimeStr))
         XMLTools_AddChildNodeWithText(parentXMLNode, "StartRequestTimeInSeconds", str(self.StartRequestTimeInSeconds))
         XMLTools_AddChildNodeWithText(parentXMLNode, "StopRequestTimeStr", str(self.StopRequestTimeStr))
         XMLTools_AddChildNodeWithText(parentXMLNode, "StopRequestTimeInSeconds", str(self.StopRequestTimeInSeconds))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "StartTrainingTimeStr", str(self.StartTrainingTimeStr))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "StopTrainingTimeStr", str(self.StopTrainingTimeStr))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "StartTestingTimeStr", str(self.StartTestingTimeStr))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "StopTestingTimeStr", str(self.StopTestingTimeStr))
 
         XMLTools_AddChildNodeWithText(parentXMLNode, "CurrentEpochNum", str(self.CurrentEpochNum))
         XMLTools_AddChildNodeWithText(parentXMLNode, "NumSequencesTrainedPerEpoch", str(self.NumSequencesTrainedPerEpoch))
         XMLTools_AddChildNodeWithText(parentXMLNode, "NumSequencesTested", str(self.NumSequencesTested))
 
-        XMLTools_AddChildNodeWithText(parentXMLNode, "NumCorrectPredictionsInTesting", str(self.NumCorrectPredictionsInTesting))
+        ###################
+        XMLTools_AddChildNodeWithText(parentXMLNode, "TotalTrainingLossInCurrentEpoch", str(self.TotalTrainingLossInCurrentEpoch))
         resultStr = ""
         for avgLoss in self.AvgLossPerEpochList:
             avgLoss = round(avgLoss, 4)
             resultStr = resultStr + str(avgLoss) + ","
         # Remove the last comma
-        if (len(self.AvgLossPerEpochList) > 0):
+        if (len(resultStr) > 0):
             resultStr = resultStr[:-1]
         XMLTools_AddChildNodeWithText(parentXMLNode, "TrainAvgLossPerEpoch", resultStr)
 
+        ###################
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumCorrectPredictionsInTesting", str(self.NumCorrectPredictionsInTesting))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumPredictionsWithin2PercentInTesting", str(self.NumPredictionsWithin2PercentInTesting))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumPredictionsWithin5PercentInTesting", str(self.NumPredictionsWithin5PercentInTesting))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumPredictionsWithin10PercentInTesting", str(self.NumPredictionsWithin10PercentInTesting))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumPredictionsWithin20PercentInTesting", str(self.NumPredictionsWithin20PercentInTesting))
 
+        ###################
         resultStr = ""
         for numItemsInClass in self.TrainNumItemsPerClass:
             resultStr = resultStr + str(numItemsInClass) + ","
         # Remove the last comma
-        if (len(self.TrainNumItemsPerClass) > 0):
+        if (len(resultStr) > 0):
             resultStr = resultStr[:-1]
         XMLTools_AddChildNodeWithText(parentXMLNode, "TrainNumItemsPerClass", resultStr)
 
-
+        ###################
         resultStr = ""
         for numItemsInClass in self.TestNumItemsPerClass:
             resultStr = resultStr + str(numItemsInClass) + ","
         # Remove the last comma
-        if (len(self.TestNumItemsPerClass) > 0):
+        if (len(resultStr) > 0):
             resultStr = resultStr[:-1]
         XMLTools_AddChildNodeWithText(parentXMLNode, "TestNumItemsPerClass", resultStr)
 
+        ###################
+        resultStr = ""
+        for numItemsInClass in self.NumTruePositivesInTesting:
+            resultStr = resultStr + str(numItemsInClass) + ","
+        # Remove the last comma
+        if (len(resultStr) > 0):
+            resultStr = resultStr[:-1]
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumTruePositivesInTesting", resultStr)
 
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "TotalTrainingLossInCurrentEpoch", str(self.TotalTrainingLossInCurrentEpoch))
+        ###################
+        XMLTools_AddChildNodeWithText(parentXMLNode, "", str(self.NumFalseNegativesInTesting))
+        resultStr = ""
+        for numItemsInClass in self.NumFalseNegativesInTesting:
+            resultStr = resultStr + str(numItemsInClass) + ","
+        # Remove the last comma
+        if (len(resultStr) > 0):
+            resultStr = resultStr[:-1]
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumFalseNegativesInTesting", resultStr)
 
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumTrueNegativesInTraining", str(self.NumTrueNegativesInTraining))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumFalsePositivesInTraining", str(self.NumFalsePositivesInTraining))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumFalseNegativesInTraining", str(self.NumFalseNegativesInTraining))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumTruePositivesInTraining", str(self.NumTruePositivesInTraining))
+        ###################
+        resultStr = ""
+        for numItemsInClass in self.NumTrueNegativesInTesting:
+            resultStr = resultStr + str(numItemsInClass) + ","
+        # Remove the last comma
+        if (len(resultStr) > 0):
+            resultStr = resultStr[:-1]
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumTrueNegativesInTesting", resultStr)
 
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumTrueNegativesInTesting", str(self.NumTrueNegativesInTesting))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumFalsePositivesInTesting", str(self.NumFalsePositivesInTesting))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumFalseNegativesInTesting", str(self.NumFalseNegativesInTesting))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "NumTruePositivesInTesting", str(self.NumTruePositivesInTesting))
+        ###################
+        resultStr = ""
+        for numItemsInClass in self.NumFalsePositivesInTesting:
+            resultStr = resultStr + str(numItemsInClass) + ","
+        # Remove the last comma
+        if (len(resultStr) > 0):
+            resultStr = resultStr[:-1]
+        XMLTools_AddChildNodeWithText(parentXMLNode, "NumFalsePositivesInTesting", resultStr)
 
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "OS", str(platform.platform()))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "CPU", str(platform.processor()))
-        XMLTools_AddChildNodeWithText(self.RuntimeXMLNode, "GPU", "None")
+
+        ###################
+        XMLTools_AddChildNodeWithText(parentXMLNode, "OS", str(platform.platform()))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "CPU", str(platform.processor()))
+        XMLTools_AddChildNodeWithText(parentXMLNode, "GPU", "None")
 
         # If there is a log string, then add it to the end of the Result node.
         if (self.BufferedLogLines != ""):
-            logXMLNode = XMLTools_GetChildNode(self.RuntimeXMLNode, MLJOB_LOG_NODE_ELEMENT_NAME)
+            logXMLNode = XMLTools_GetChildNode(parentXMLNode, MLJOB_LOG_NODE_ELEMENT_NAME)
             if (logXMLNode == None):
                 logXMLNode = self.JobXMLDOM.createElement(MLJOB_LOG_NODE_ELEMENT_NAME)
-                self.RuntimeXMLNode.appendChild(logXMLNode)
+                parentXMLNode.appendChild(logXMLNode)
             XMLTools_SetTextContents(logXMLNode, self.BufferedLogLines)
         # End - if (self.BufferedLogLines != "")
     # End -  SaveRuntimeToXML
+
 
 
 
@@ -742,13 +908,11 @@ class MLJob():
     def ReadJobFromFile(self, jobFilePathName):
         self.jobFilePathName = jobFilePathName
         fileH = open(self.jobFilePathName, "r")
-
         contentsText = fileH.read()
-        self.ReadJobFromString(contentsText)
-
         fileH.close()
-    # End of ReadJobFromFile
 
+        self.ReadJobFromString(contentsText)
+    # End of ReadJobFromFile
 
 
 
@@ -759,11 +923,17 @@ class MLJob():
     #
     #####################################################
     def SaveAs(self, jobFilePathName):
-        fileH = open(jobFilePathName, "w+")
+        #print("MLJob::SaveAs. Path=" + jobFilePathName)
 
         contentsText = self.WriteJobToString(True)
+        #print("MLJob::SaveAs. contentsText=" + contentsText)
 
-        fileH.write(contentsText)
+        fileH = open(jobFilePathName, "w")
+        #print("MLJob::SaveAs. Opened file. fileH=" + str(fileH))
+
+        numCharsWritten = fileH.write(contentsText)
+        #print("MLJob::SaveAs. Finished write. numCharsWritten=" + str(numCharsWritten))
+
         fileH.close()
     # End of SaveAs
 
@@ -783,141 +953,37 @@ class MLJob():
         completeLogLine = timeStr + " " + messageStr + NEWLINE_STR
         self.BufferedLogLines = self.BufferedLogLines + completeLogLine
 
-        MLJob_Log(messageStr)
+        #print(messageStr)
     # End of Log
 
 
 
 
 
-
     #####################################################
     #
-    # [MLJob::SelectFirstRequestVariant
-    # 
-    # This is called BOTH internally, when we open a new job, and
-    # may also be called externally.
-    #####################################################
-    def SelectFirstRequestVariant(self):
-        #print("SelectFirstRequestVariant")
-
-        self.CurrentRequestXMLNode = self.OriginalRequestXMLNode.cloneNode(True)
-        self.CurrentRequestVariantXMLNode = None
-
-        # The variant list is optional. If there is none, then there is no "first" variant.
-        # If there is no first variant, then just use the request itself.
-        if (self.RequestVariantList != None):
-            #print("MLJob::SelectFirstRequestVariant. Set the first variant")
-            self.CurrentRequestVariantXMLNode = XMLTools_GetChildNode(self.RequestVariantList, "Variant")
-            if (self.CurrentRequestVariantXMLNode != None):
-                #print("MLJob::SelectFirstRequestVariant. Apply a variant")
-                self.ApplyVariantToCurrentRequestImpl()
-
-        return(True)
-    # End - SelectFirstRequestVariant
-
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::SelectNextRequestVariant
-    # 
-    # This is externally by the client
-    #####################################################
-    def SelectNextRequestVariant(self):
-        #print("SelectNextRequestVariant. RequestVariantList=" + str(self.RequestVariantList))
-        #print("SelectNextRequestVariant. CurrentRequestVariantXMLNode=" + str(self.CurrentRequestVariantXMLNode))
-        #debugStr = self.CurrentRequestVariantXMLNode.toprettyxml(indent=" ", newl="", encoding=None)
-        #print(">>>" + debugStr)
-
-        # The variant list is optional. If there is none, then there is no "next" variant.
-        if ((self.RequestVariantList == None) or (self.CurrentRequestVariantXMLNode == None)):
-            print("MLJob::SelectNextRequestVariant. (self.RequestVariantList == None)")
-            return(False)
-
-        # Try advancing to the next variant.
-        self.CurrentRequestVariantXMLNode = XMLTools_GetPeerNode(self.CurrentRequestVariantXMLNode, "Variant")
-
-        # If we are at the end, then we are done.
-        if (self.CurrentRequestVariantXMLNode == None):
-            print("MLJob::SelectNextRequestVariant 2. (self.CurrentRequestVariantXMLNode == None)")
-            return(False)
-
-        self.CurrentRequestXMLNode = self.OriginalRequestXMLNode.cloneNode(True)
-        self.ApplyVariantToCurrentRequestImpl()
-
-        return(True)
-    # End - SelectNextRequestVariant
-
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::ApplyVariantToCurrentRequestImpl
+    # [MLJob::GetResultInfoImpl
     # 
     #####################################################
-    def ApplyVariantToCurrentRequestImpl(self):
-        valueNode = XMLTools_GetFirstChildNode(self.CurrentRequestVariantXMLNode)
-        while (valueNode != None):
-            name = XMLTools_GetElementName(valueNode)
-            value = XMLTools_GetTextContents(valueNode)
-            #print("MLJob::ApplyVariantToCurrentRequestImpl. Overwrite name=" + name)
-            #print("MLJob::ApplyVariantToCurrentRequestImpl. Overwrite value=" + value)
+    def GetResultInfoImpl(self):
+        self.ResultValueType = TDF_DATA_TYPE_INT
+        self.MinNumberResultVal = 0
+        self.MaxNumberResultVal = 0
+        self.ResultNumberBucketSize = 1.0
 
-            currentChildNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, name)
-            if (currentChildNode == None):
-                currentChildNode = self.JobXMLDOM.createElement(name)
-                self.RootXMLNode.appendChild(currentChildNode)
-            XMLTools_SetTextContents(currentChildNode, value)
+        # Figure out the result value type.
+        try:
+            resultValName = XMLTools_GetChildNodeText(self.RequestXMLNode, "ResultValue")
+        except:
+            resultValName = "number"
 
-            valueNode = XMLTools_GetAnyPeerNode(valueNode)
-        # End - while (valueNode != None):
-    # End - ApplyVariantToCurrentRequestImpl
+        self.ResultValueType = TDF_GetVariableType(resultValName)
+        if ((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)):
+            self.MinNumberResultVal, self.MaxNumberResultVal = TDF_GetMinMaxValuesForVariable(resultValName)
+            range = float(self.MaxNumberResultVal - self.MinNumberResultVal)
+            self.ResultNumberBucketSize = float(range) / float(ML_JOB_NUM_NUMERIC_VALUE_BUCKETS)
+    # End - GetResultInfoImpl
 
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::DiscardPastResults
-    # 
-    # This is a public procedure, it is called by the client.
-    #####################################################
-    def DiscardPastResults(self):
-        XMLTools_RemoveAllChildNodes(self.ResultsListXMLNode)
-    # End - DiscardPastResults
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::StartNewResult
-    #
-    # This is a public procedure, it is called by the client.
-    #####################################################
-    def StartNewResult(self):
-        currentResultXMLNode = self.JobXMLDOM.createElement("Result")
-        self.ResultsListXMLNode.appendChild(currentResultXMLNode)
-    # End - StartNewResult
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::GetLatestResultNodeImpl
-    # 
-    #####################################################
-    def GetLatestResultNodeImpl(self):
-        currentResultXMLNode = XMLTools_GetLastChildNode(self.ResultsListXMLNode)
-        return(currentResultXMLNode)
-    # End - GetLatestResultNodeImpl
 
 
 
@@ -929,12 +995,17 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def StartJobExecution(self):
+        # Discard Previous results
+        XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
+
         # Each request has a single test. When we finish the test, we have
         # finished the entire reqeust.
         self.SetJobControlStr("Status", "Pending")
         self.SetJobControlStr("Error", "None")
 
-        self.StartRequestTimeStr = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+        now = datetime.now()
+        self.StartRequestTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
+
         self.StartRequestTimeInSeconds = time.time()
     # End of StartJobExecution
 
@@ -953,28 +1024,19 @@ class MLJob():
         if (fSuccess):
             self.SetJobControlStr("Status", "OK")
             self.SetJobControlStr("Error", "")
-            MLJob_Log("Job Success")
         else:
             self.SetJobControlStr("Status", "Error")
             self.SetJobControlStr("Error", errorMsg)
-            MLJob_Log(errorMsg)
 
-        self.StopRequestTimeStr = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+        now = datetime.now()
+        self.StopRequestTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
         self.StopRequestTimeInSeconds = time.time()
 
-
-        # Make a new XML Node
-        resultXMLNode = self.JobXMLDOM.createElement("Results")
-        self.ResultsListXMLNode.appendChild(self.ResultsListXMLNode)
-
-        # If there is a request variant that made this request, then save a copy of it to the results.
-        # This makes it easier to see the configuration that generated each result.
-        if (self.CurrentRequestVariantXMLNode != None):
-            variantCopy = self.CurrentRequestVariantXMLNode.cloneNode(True)
-            resultXMLNode.appendChild(variantCopy)
+        # Remove earlier results
+        XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
 
         # Save the runtime state
-        self.SaveRuntimeToXML(resultXMLNode)
+        self.SaveRuntimeToXML(self.ResultsXMLNode)
     # End of FinishJobExecution
 
 
@@ -988,17 +1050,29 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def StartTraining(self):
+        now = datetime.now()
+        self.StartTrainingTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        self.CurrentEpochNum = 0
         self.NumSequencesTrainedPerEpoch = 0
 
         self.AvgLossPerEpochList = []
         self.TotalTrainingLossInCurrentEpoch = 0.0
 
-        self.TrainNumItemsPerClass = [0] * TDF_NUM_CATEGORIES_IN_FUTURE_VAL
+        if ((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)):
+            numClasses = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS
+        elif (self.ResultValueType == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            numClasses = TDF_NUM_CATEGORIES_IN_FUTURE_VAL
+        elif (self.ResultValueType == TDF_DATA_TYPE_BOOL):
+            numClasses = 2
+        else:
+            numClasses = 1
 
-        self.NumTrueNegativesInTraining = 0
-        self.NumFalsePositivesInTraining = 0
-        self.NumFalseNegativesInTraining = 0
-        self.NumTruePositivesInTraining = 0
+        self.TrainNumItemsPerClass = [0] * numClasses
+        self.NumTruePositivesInTraining = [0] * numClasses
+        self.NumFalseNegativesInTraining = [0] * numClasses
+        self.NumTrueNegativesInTraining = [0] * numClasses
+        self.NumFalsePositivesInTraining = [0] * numClasses
     # End - StartTraining
 
 
@@ -1012,10 +1086,7 @@ class MLJob():
     #####################################################
     def StartTrainingEpoch(self):
         # Reset the counters for the new epoch
-        self.NumSequencesTrainedPerEpoch = 0
-
         self.TotalTrainingLossInCurrentEpoch = 0.0
-        #print("StartTrainingEpoch. self.TotalTrainingLossInCurrentEpoch=" + str(self.TotalTrainingLossInCurrentEpoch))
     # End - StartTrainingEpoch
 
 
@@ -1028,14 +1099,10 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def FinishTrainingEpoch(self):
-        #print("FinishTrainingEpoch")
-
         if (self.NumSequencesTrainedPerEpoch > 0):
             avgLoss = float(self.TotalTrainingLossInCurrentEpoch / float(self.NumSequencesTrainedPerEpoch))
         else:
             avgLoss = 0.0
-        #print("FinishTrainingEpoch. avgLoss=" + str(avgLoss))
-
         self.AvgLossPerEpochList.append(avgLoss)
 
         self.CurrentEpochNum += 1
@@ -1051,9 +1118,8 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def RecordTrainingLoss(self, loss):
-        #print("RecordTrainingLoss. loss=" + str(loss))
-
-        self.NumSequencesTrainedPerEpoch += 1
+        if (self.CurrentEpochNum == 0):
+            self.NumSequencesTrainedPerEpoch += 1
         self.TotalTrainingLossInCurrentEpoch += loss
     # End -  RecordTrainingLoss
 
@@ -1062,17 +1128,29 @@ class MLJob():
 
     #####################################################
     #
-    # [MLJob::RecordTrainingForFutureEvent
+    # [MLJob::RecordTrainingResult
     # 
     # This is a public procedure, it is called by the client.
     #####################################################
-    def RecordTrainingForFutureEvent(self, actualClass, predictedClass):
-        #print("RecordTrainingForFutureEvent. loss=" + str(loss))
-
+    def RecordTrainingResult(self, actualValue, predictedValue):
         # We only record the stats on the first epoch.
         if (self.CurrentEpochNum == 0):
-            self.TrainNumItemsPerClass[actualClass] += 1
-    # End -  RecordTrainingForFutureEvent
+            #####################
+            if (self.ResultValueType == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+                self.TrainNumItemsPerClass[int(actualValue)] += 1
+
+            #####################
+            elif (self.ResultValueType == TDF_DATA_TYPE_BOOL):
+                self.TrainNumItemsPerClass[actualValue] += 1
+
+            #####################
+            elif ((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)):
+                offset = actualValue - self.MinNumberResultVal
+                bucketNum = int(offset / self.ResultNumberBucketSize)
+                if (bucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
+                    bucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
+                self.TrainNumItemsPerClass[bucketNum] += 1
+    # End -  RecordTrainingResult
 
 
 
@@ -1084,9 +1162,10 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def FinishTraining(self):
-        #print("In FinishTraining")
-        resultsNode = self.GetLatestResultNodeImpl()
+        now = datetime.now()
+        self.StopTrainingTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
     # End - FinishTraining
+
 
 
 
@@ -1098,21 +1177,47 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def PrintTrainingStats(self):
-        print("Each Epoch contains:")
-        print("    Num Sequences = " + str(self.NumSequencesTrainedPerEpoch))
+        indentStr = "   "
 
+        print(" ")
+        jobNameStr = self.GetRequestValueStr("JobName", "")
+        if (jobNameStr != ""):
+            print(jobNameStr)
+        print(" ")
+        print("Training Results:")
+        print(RESULT_SECTION_SEPARATOR_STR)
+        print("Start Training: " + self.StartTrainingTimeStr)
+        print("Complete Training: " + self.StopTrainingTimeStr)
+
+        ##############
+        print(" ")
+        print("Each Epoch contains:")
+        print(indentStr + "Num Sequences: " + str(self.NumSequencesTrainedPerEpoch))
+        print(" ")
         resultStr = ""
         for avgLoss in self.AvgLossPerEpochList:
             avgLoss = round(avgLoss, 4)
-            resultStr = resultStr + "    " + str(avgLoss)
-        print("Average Losses Per Epoch:" + resultStr)
+            resultStr = resultStr + " " + str(avgLoss)
+        print(indentStr + "Average Losses Per Epoch: " + resultStr)
 
+        ##############
+        print(" ")
         resultStr = ""
+        bucketStartValue = self.MinNumberResultVal
+        bucketStopValue =  bucketStartValue + self.ResultNumberBucketSize
         for numItems in self.TrainNumItemsPerClass:
-            resultStr = resultStr + "    " + str(numItems)
-        print("Num Items in Each Event Class: " + resultStr)
-    # End - PrintTrainingStats
+            bucketStartValue = round(bucketStartValue, 2)
+            bucketStopValue = round(bucketStopValue, 2)
 
+            resultStr = resultStr + indentStr + indentStr
+            resultStr = resultStr + "[" + str(bucketStartValue) + " - " + str(bucketStopValue) + "]:    " 
+            resultStr = resultStr + str(numItems) + NEWLINE_STR
+
+            bucketStartValue +=  self.ResultNumberBucketSize
+            bucketStopValue +=  self.ResultNumberBucketSize
+
+        print(indentStr + "Num Items in Each Event Class: \n" + resultStr)
+    # End - PrintTrainingStats
 
 
 
@@ -1125,15 +1230,31 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def StartTesting(self):
+        now = datetime.now()
+        self.StartTestingTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
+
         self.NumSequencesTested = 0
+
         self.NumCorrectPredictionsInTesting = 0
+        self.NumPredictionsWithin2PercentInTesting = 0
+        self.NumPredictionsWithin5PercentInTesting = 0
+        self.NumPredictionsWithin10PercentInTesting = 0
+        self.NumPredictionsWithin20PercentInTesting = 0
 
-        self.TestNumItemsPerClass = [0] * TDF_NUM_CATEGORIES_IN_FUTURE_VAL
+        if ((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)):
+            numClasses = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS
+        elif (self.ResultValueType == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            numClasses = TDF_NUM_CATEGORIES_IN_FUTURE_VAL
+        elif (self.ResultValueType == TDF_DATA_TYPE_BOOL):
+            numClasses = 1
+        else:
+            numClasses = 1
 
-        self.NumTrueNegativesInTesting = 0
-        self.NumFalsePositivesInTesting = 0
-        self.NumFalseNegativesInTesting = 0
-        self.NumTruePositivesInTesting = 0
+        self.TestNumItemsPerClass = [0] * numClasses
+        self.NumTruePositivesInTesting = [0] * numClasses
+        self.NumFalseNegativesInTesting = [0] * numClasses
+        self.NumTrueNegativesInTesting = [0] * numClasses
+        self.NumFalsePositivesInTesting = [0] * numClasses
     # End - StartTesting
 
 
@@ -1142,59 +1263,62 @@ class MLJob():
 
     #####################################################
     #
-    # [MLJob::RecordTestingResultForFutureEvent
+    # [MLJob::RecordTestingResult
     # 
     # This is a public procedure, it is called by the client.
     #
     #####################################################
-    def RecordTestingResultForFutureEvent(self, actualDiagnosisClass, predictedDiagnosis):
-        #print("RecordTestingResultForFutureEvent")
-
+    def RecordTestingResult(self, actualValue, predictedValue):
         self.NumSequencesTested += 1
 
-        # Categorize the result.
-        if (actualDiagnosisClass == predictedDiagnosis):
-            self.NumCorrectPredictionsInTesting += 1
-        self.TestNumItemsPerClass[actualDiagnosisClass] += 1
-    # End -  RecordTestingResultForFutureEvent
+        #########################
+        if ((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)):
+            difference = actualValue - predictedValue
+            if (difference < 0):
+                difference = -difference
 
+            if (difference == 0):
+                self.NumCorrectPredictionsInTesting += 1
+            if (difference < (actualValue * 0.02)):
+                self.NumPredictionsWithin2PercentInTesting += 1
+            elif (difference < (actualValue * 0.05)):
+                self.NumPredictionsWithin5PercentInTesting += 1
+            elif (difference < (actualValue * 0.1)):
+                self.NumPredictionsWithin10PercentInTesting += 1
+            elif (difference < (actualValue * 0.2)):
+                self.NumPredictionsWithin20PercentInTesting += 1
 
+        #########################
+        elif (self.ResultValueType == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            actualValueInt = int(actualValue)
+            predictedValueInt = int(predictedValue)
+            self.TestNumItemsPerClass[actualValueInt] += 1
+            if (actualValueInt == predictedValueInt):
+                self.NumCorrectPredictionsInTesting += 1
 
+            if (actualValueInt == predictedValueInt):
+                self.NumTruePositivesInTesting[actualValueInt] += 1
+            else: # if (actualValueInt != predictedValueInt):
+                self.NumFalseNegativesInTesting[actualValueInt] += 1
+                self.NumFalsePositivesInTesting[predictedValueInt] += 1
 
+        #########################
+        elif (self.ResultValueType == TDF_DATA_TYPE_BOOL):
+            self.TestNumItemsPerClass[actualValue] += 1
+            if (actualValue == predictedValue):
+                self.NumCorrectPredictionsInTesting += 1
 
-    #####################################################
-    #
-    # [MLJob::RecordTestingResultForDiagnosis
-    # 
-    # This is a public procedure, it is called by the client
-    #
-    #####################################################
-    def RecordTestingResultForDiagnosis(self, actualDiagnosisClass, predictedDiagnosis):
-        self.NumSequencesTested += 1
-
-        # Categorize the result.
-        if (actualDiagnosisClass == predictedDiagnosis):
-            self.NumCorrectPredictionsInTesting += 1
-
-        # Categorize the result.
-        if (actualDiagnosisClass == 0):
-            if (predictedDiagnosis == 0):
-                self.NumTrueNegativesInTesting += 1
-            elif (predictedDiagnosis == 1):
-                self.NumFalsePositivesInTesting += 1
-            else:
-                print("Invalid predictedDiagnosis: " + str(predictedDiagnosis))
-        elif (actualDiagnosisClass == 1):
-            if (predictedDiagnosis == 0):
-                self.NumTruePositivesInTesting += 1
-            elif (predictedDiagnosis == 1):
-                self.NumTruePositivesInTesting += 1
-            else:
-                print("Invalid predictedDiagnosis: " + str(predictedDiagnosis))
-        else:
-            print("Invalid actualDiagnosisClass: " + str(actualDiagnosisClass))
-    # End -  RecordTestingResultForDiagnosis
-
+            if (actualValue > 0):
+                if (predictedValue > 0):
+                    self.NumTruePositivesInTesting[0] += 1
+                else:
+                    self.NumFalseNegativesInTesting[0] += 1
+            elif (actualValue <= 0):
+                if (predictedValue > 0):
+                    self.NumFalsePositivesInTesting[0] += 1
+                else:
+                    self.NumTrueNegativesInTesting[0] += 1
+    # End -  RecordTestingResult
 
 
 
@@ -1206,7 +1330,8 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def FinishTesting(self):
-        return
+        now = datetime.now()
+        self.StopTestingTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
     # End - FinishTesting
 
 
@@ -1216,46 +1341,93 @@ class MLJob():
     #####################################################
     #
     # [MLJob::PrintTestingStats
-    # 
+    #
     # This is a public procedure, it is called by the client.
     #####################################################
     def PrintTestingStats(self):
+        print(" ")
         print("Test Results:")
+        print(RESULT_SECTION_SEPARATOR_STR)
+        print("Start Job: " + self.StartRequestTimeStr)
+        print("Complete Job: " + self.StopRequestTimeStr)
+        print("Start Testing: " + self.StartTestingTimeStr)
+        print("Complete Testing: " + self.StopTestingTimeStr)
 
-        resultStr = ""
-        for numItems in self.TestNumItemsPerClass:
-            resultStr = resultStr + "    " + str(numItems)
-        print("Num Items in Each Event Class: " + resultStr)
+        print("Number Sequences Tested: " + str(self.NumSequencesTested))
 
-        if ((self.NumCorrectPredictionsInTesting > 0) and (self.NumSequencesTested > 0)):
+        #########################
+        if (((self.ResultValueType == TDF_DATA_TYPE_INT) or (self.ResultValueType == TDF_DATA_TYPE_FLOAT)) and (self.NumSequencesTested > 0)):
             percentAccurate = float(self.NumCorrectPredictionsInTesting) / float(self.NumSequencesTested)
             percentAccurate = percentAccurate * 100.0
             fractionInt = round(percentAccurate)
-            print("Accuracy: " + str(fractionInt) + "%")
+            print("Exact Accuracy: " + str(fractionInt) + "%")
 
-        #print("True Positives: " + str(self.NumSequencesTested))
-        #print("True Positives: " + str(self.NumCorrectPredictionsInTesting))
+            percentAccurate = float(self.NumPredictionsWithin2PercentInTesting) / float(self.NumSequencesTested)
+            percentAccurate = percentAccurate * 100.0
+            fractionInt = round(percentAccurate)
+            print("Within 2 percent Accuracy: " + str(fractionInt) + "%")
 
-        #print("True Positives: " + str(self.NumTruePositivesInTesting))
-        #print("True Negatives: " + str(self.NumTrueNegativesInTesting))
-        #print("False Positives: " + str(self.NumFalsePositivesInTesting))
-        #print("False Negatives: " + str(self.NumTruePositivesInTesting))
-    
-        if (False):
-            total = float(self.NumTruePositivesInTesting + self.NumTruePositivesInTesting)
-            if (total > 0):
-                fractionFloat = float(float(self.NumTruePositivesInTesting) / total)
-                fractionFloat = fractionFloat * 100.0
-                fractionInt = round(fractionFloat)
-                print("Sensitivity: " + str(fractionInt) + "%")
-    
-            total = float(self.NumTrueNegativesInTesting + self.NumFalsePositivesInTesting)
-            if (total > 0):
-                fractionFloat = float(float(self.NumTrueNegativesInTesting) / total)
-                fractionFloat = fractionFloat * 100.0
-                fractionInt = round(fractionFloat)
-                print("Specificity: " + str(fractionInt) + "%")
-        # End - if (False)
+            percentAccurate = float(self.NumPredictionsWithin5PercentInTesting) / float(self.NumSequencesTested)
+            percentAccurate = percentAccurate * 100.0
+            fractionInt = round(percentAccurate)
+            print("Within 5 percent Accuracy: " + str(fractionInt) + "%")
+
+            percentAccurate = float(self.NumPredictionsWithin10PercentInTesting) / float(self.NumSequencesTested)
+            percentAccurate = percentAccurate * 100.0
+            fractionInt = round(percentAccurate)
+            print("Within 10 percent Accuracy: " + str(fractionInt) + "%")
+
+            percentAccurate = float(self.NumPredictionsWithin20PercentInTesting) / float(self.NumSequencesTested)
+            percentAccurate = percentAccurate * 100.0
+            fractionInt = round(percentAccurate)
+            print("Within 20 percent Accuracy: " + str(fractionInt) + "%")
+
+        #########################
+        elif (self.ResultValueType == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            totalNumItems = 0
+            totalCorrectPositives = 0
+            for classNum in range(TDF_NUM_CATEGORIES_IN_FUTURE_VAL):
+                totalNumItems += self.TestNumItemsPerClass[classNum]
+                totalCorrectPositives += self.NumTruePositivesInTesting[classNum]
+
+                print(NEWLINE_STR + "Class " + str(classNum))
+                print("    Num Items in Event Class: " + str(self.TestNumItemsPerClass[classNum]))
+                print("    True Positives: " + str(self.NumTruePositivesInTesting[classNum]))
+                print("    False Positives: " + str(self.NumFalsePositivesInTesting[classNum]))
+                print("    False Negatives: " + str(self.NumTrueNegativesInTesting[classNum]))
+                if (float(self.TestNumItemsPerClass[classNum]) <= 0):
+                    sens = 0.0
+                else:
+                    sens = float(self.NumTruePositivesInTesting[classNum]) / float(self.TestNumItemsPerClass[classNum])
+                sens = sens * 100.0
+                sens = round(sens, 1)
+                print("    Sensitivity: " + str(sens) + " percent")
+            # End - for classNum in range(TDF_NUM_CATEGORIES_IN_FUTURE_VAL):
+
+            if (totalNumItems > 0):
+                totalAcc = float(totalCorrectPositives) / float(totalNumItems)
+            else:
+                totalAcc = 0.0
+            totalAcc = totalAcc * 100.0
+            totalAcc = round(totalAcc, 1)
+            print(NEWLINE_STR + "Total Cases: " + str(totalNumItems))
+            print("Total Correct: " + str(totalCorrectPositives))
+            print("Total Accurracy: " + str(totalAcc) + " percent")
+
+        #########################
+        elif (self.ResultValueType == TDF_DATA_TYPE_BOOL):
+            resultStr = ""
+            for numItems in self.TestNumItemsPerClass:
+                resultStr = resultStr + "    " + str(numItems)
+            print("Num Positive Items: " + resultStr)
+
+            print("True Positives: " + str(self.NumTruePositivesInTesting[0]))
+            print("True Negatives: " + str(self.NumTrueNegativesInTesting[0]))
+            print("False Positives: " + str(self.NumFalsePositivesInTesting[0]))
+            print("False Negatives: " + str(self.NumTruePositivesInTesting[0]))
+
+
+        print(" ")
     # End - PrintTestingStats
 
 
@@ -1265,15 +1437,17 @@ class MLJob():
     #
     # [MLJob::GetRequestValueStr]
     #
+    # Returns one parameter from the currently active request.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetRequestValueStr(self, valName, defaultVal):
-        xmlNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, valName)
+        xmlNode = XMLTools_GetChildNode(self.RequestXMLNode, valName)
         if (xmlNode == None):
-            print("MLJob::GetRequestValueStr: No XML Node valName=" + valName)
+            #print("MLJob::GetRequestValueStr: No XML Node valName=" + valName)
             return(defaultVal)
 
         resultStr = XMLTools_GetTextContents(xmlNode)
+        resultStr = resultStr.lstrip()
         if ((resultStr == None) or (resultStr == "")):
             return(defaultVal)
 
@@ -1287,15 +1461,17 @@ class MLJob():
     #
     # [MLJob::GetRequestValueInt]
     #
+    # Returns one parameter from the currently active request.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetRequestValueInt(self, valName, defaultVal):
-        xmlNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, valName)
+        xmlNode = XMLTools_GetChildNode(self.RequestXMLNode, valName)
         if (xmlNode == None):
-            print("MLJob::GetRequestValueInt: No XML Node. valName=[" + valName + "]")
+            #print("MLJob::GetRequestValueInt: No XML Node. valName=[" + valName + "]")
             return(defaultVal)
 
         resultStr = XMLTools_GetTextContents(xmlNode)
+        resultStr = resultStr.lstrip()
         if ((resultStr == None) or (resultStr == "")):
             return(defaultVal)
 
@@ -1315,15 +1491,17 @@ class MLJob():
     #
     # [MLJob::GetRequestValueBool]
     #
+    # Returns one parameter from the currently active request.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetRequestValueBool(self, valName, defaultVal):
-        xmlNode = XMLTools_GetChildNode(self.CurrentRequestXMLNode, valName)
+        xmlNode = XMLTools_GetChildNode(self.RequestXMLNode, valName)
         if (xmlNode == None):
             print("MLJob::GetRequestValueBool: No XML Node. valName=" + valName)
             return(defaultVal)
 
         resultStr = XMLTools_GetTextContents(xmlNode)
+        resultStr = resultStr.lstrip()
         if ((resultStr == None) or (resultStr == "")):
             return(defaultVal)
 
@@ -1342,13 +1520,14 @@ class MLJob():
     #
     # [MLJob::SetRequestValueStr]
     #
+    # Sets one parameter in the currently active request.
     # This is a public procedure, it is called by the client.
     #####################################################
     def SetRequestValueStr(self, valName, valueStr):
-        xmlNode = XMLTools_GetChildNode(self.OriginalRequestXMLNode, valName)
+        xmlNode = XMLTools_GetChildNode(self.RequestXMLNode, valName)
         if (xmlNode == None):
             xmlNode = self.JobXMLDOM.createElement(valName)
-            self.OriginalRequestXMLNode.appendChild(xmlNode)
+            self.RequestXMLNode.appendChild(xmlNode)
 
         XMLTools_RemoveAllChildNodes(xmlNode)
         textNode = self.JobXMLDOM.createTextNode(valueStr)
@@ -1363,6 +1542,7 @@ class MLJob():
     #
     # [MLJob::GetJobControlStr]
     #
+    # Returns one parameter to the <JobControl> node.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetJobControlStr(self, valName, defaultVal):
@@ -1371,6 +1551,7 @@ class MLJob():
             return(defaultValue)
 
         resultStr = XMLTools_GetTextContents(xmlNode)
+        resultStr = resultStr.lstrip()
         if ((resultStr == None) or (resultStr == "")):
             return(defaultValue)
 
@@ -1384,6 +1565,7 @@ class MLJob():
     #
     # [MLJob::SetJobControlStr]
     #
+    # Updates one parameter to the <JobControl> node.
     # This is a public procedure, it is called by the client.
     #####################################################
     def SetJobControlStr(self, valName, valueStr):
@@ -1404,6 +1586,7 @@ class MLJob():
     #
     # [MLJob::GetJobControlBool]
     #
+    # Returns one parameter to the <JobControl> node.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetJobControlBool(self, valName, defaultVal):
@@ -1427,6 +1610,7 @@ class MLJob():
     #
     # [MLJob::GetDataParam]
     #
+    # Returns one parameter to the <Data> node.
     # This is a public procedure, it is called by the client.
     #####################################################
     def GetDataParam(self, valName):
@@ -1435,6 +1619,7 @@ class MLJob():
             return("")
 
         resultStr = XMLTools_GetTextContents(xmlNode)
+        resultStr = resultStr.lstrip()
         if ((resultStr == None) or (resultStr == "")):
             return("")
 
@@ -1448,6 +1633,7 @@ class MLJob():
     #
     # [MLJob::SetDataParam]
     #
+    # Updates one parameter to the <Data> node.
     # This is a public procedure, it is called by the client.
     #####################################################
     def SetDataParam(self, valName, valueStr):
@@ -1491,6 +1677,66 @@ class MLJob():
 
 
 
+    #####################################################
+    #
+    # [MLJob::GetResultValueType]
+    #
+    # This is a public procedure, it is called by the client.
+    #####################################################
+    def GetResultValueType(self):
+        return(self.ResultValueType)
+    # End of GetResultValueType
+
+
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::GetFilterProperties]
+    #
+    # This is a public procedure, it is called by the client.
+    #####################################################
+    def GetFilterProperties(self):
+        numProperties = 0
+        propertyRelationList = []
+        propertyNameList = []
+        propertyValueList = []
+
+        propertyListStr = self.GetRequestValueStr("ValueFilter", "")
+        if (propertyListStr != ""):
+            propList = propertyListStr.split(';')
+            for propNamePair in propList:
+                #print("propNamePair=" + propNamePair)
+                namePairParts = re.split("(.LT.|.LTE.|=|.GTE.|.GT.)", propNamePair)
+                if (len(namePairParts) == 3):
+                    partStr = namePairParts[0]
+                    partStr = partStr.replace(' ', '')
+                    #print("propNamePair. Name=" + str(partStr))
+                    propertyNameList.append(partStr)
+
+                    partStr = namePairParts[1]
+                    partStr = partStr.replace(' ', '')
+                    # Tokens like ".GT. are case insensitive
+                    partStr = partStr.upper()
+                    #print("propNamePair. op=" + str(partStr))
+                    propertyRelationList.append(partStr)
+
+                    partStr = namePairParts[2]
+                    partStr = partStr.replace(' ', '')
+                    #print("propNamePair. value=" + str(partStr))
+                    propertyValueList.append(partStr)
+
+                    numProperties += 1
+            # End - for propNamePair in propList:
+        # End - if (requirePropertiesStr != ""):
+
+        return numProperties, propertyRelationList, propertyNameList, propertyValueList
+    # End - GetFilterProperties
+
+
+
 
 
     #####################################################
@@ -1512,6 +1758,35 @@ class MLJob():
 
         return True
     # End - HasTestMatrix
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::GetTestMatrix
+    # 
+    #####################################################
+    def GetTestMatrix(self, testName, matrixName):
+        if (self.TestListXMLNode == None):
+            return None
+
+        testXMLNode = XMLTools_GetChildNode(self.TestListXMLNode, testName)
+        if (testXMLNode == None):
+            return None
+
+        matrixXMLNode = XMLTools_GetChildNode(testXMLNode, matrixName)
+        if (matrixXMLNode == None):
+            return None
+
+        matrixStr = XMLTools_GetTextContents(matrixXMLNode)
+        matrixStr = matrixStr.lstrip()
+        #print("MLJob::GetTestMatrix. matrixStr=" + matrixStr)
+        matrix = self.MLJob_ConvertStringTo2DMatrix(matrixStr)
+
+        return matrix
+    # End - GetTestMatrix
+
 
 
 
@@ -1542,33 +1817,6 @@ class MLJob():
 
 
 
-    #####################################################
-    #
-    # [MLJob::GetTestMatrix
-    # 
-    #####################################################
-    def GetTestMatrix(self, testName, matrixName):
-        if (self.TestListXMLNode == None):
-            return None
-
-        testXMLNode = XMLTools_GetChildNode(self.TestListXMLNode, testName)
-        if (testXMLNode == None):
-            return None
-
-        matrixXMLNode = XMLTools_GetChildNode(testXMLNode, matrixName)
-        if (matrixXMLNode == None):
-            return None
-
-        matrixStr = XMLTools_GetTextContents(matrixXMLNode)
-        #print("MLJob::GetTestMatrix. matrixStr=" + matrixStr)
-        matrix = self.MLJob_ConvertStringTo2DMatrix(matrixStr)
-
-        return matrix
-    # End - GetTestMatrix
-
-
-
-
 
     #####################################################
     #
@@ -1580,16 +1828,21 @@ class MLJob():
 
         if (self.TestListXMLNode == None):
             print("ERROR!!!!!!!! Missing Matrix! testName=" + testName + ", matrixName=" + matrixName)
+            sys.exit(0)
 
         testXMLNode = XMLTools_GetChildNode(self.TestListXMLNode, testName)
         if (testXMLNode == None):
             print("ERROR!!!!!!!! Missing Matrix! testName=" + testName + ", matrixName=" + matrixName)
+            sys.exit(0)
 
         matrixXMLNode = XMLTools_GetChildNode(testXMLNode, matrixName)
         if (matrixXMLNode == None):
             print("ERROR!!!!!!!! Missing Matrix! testName=" + testName + ", matrixName=" + matrixName)
+            sys.exit(0)
 
         matrixStr = XMLTools_GetTextContents(matrixXMLNode)
+        matrixStr = matrixStr.lstrip()
+
         correctMatrix = self.MLJob_ConvertStringTo2DMatrix(matrixStr)
         #print("CheckTestMatrix. correctMatrix=" + str(correctMatrix))
 
@@ -1598,43 +1851,53 @@ class MLJob():
         numDimensions = len(correctMatrixSize)
         if (len(matrixSize) != len(correctMatrixSize)):
             print("ERROR!!!!!!!! Different Number of Matrix dimensions! testName=" + testName + ", matrixName=" + matrixName)
-            return
+            sys.exit(0)
         if (len(matrixSize) != 2):
             print("ERROR!!!!!!!! Matrix is not two-dimensional! testName=" + testName + ", matrixName=" + matrixName)
-            return
+            sys.exit(0)
         if (matrixSize[0] != correctMatrixSize[0]):
             print("ERROR!!!!!!!! Matrix dimensions Are Different! testName=" + testName + ", matrixName=" + matrixName)
-            return
+            sys.exit(0)
         if (matrixSize[0] != correctMatrixSize[0]):
             print("ERROR!!!!!!!! Matrix dimensions Are Different! testName=" + testName + ", matrixName=" + matrixName)
-            return
+            sys.exit(0)
 
-        #isEqual = (matrix == correctMatrix).all()
-        isEqual = numpy.array_equiv(matrix, correctMatrix)
-        #print("isEqual=" + str(isEqual))
-        #print("CheckTestMatrix. matrix.size=" + str(matrix.shape))
-        #print("CheckTestMatrix. correctMatrix.size=" + str(correctMatrix.shape))
+        isClose = numpy.allclose(matrix, correctMatrix, atol=0.00001)
+        if (not isClose):
+            print("ERROR!!!!!!!! Matrices Are Different (fail numpy.array_equiv)! testName=" + testName + ", matrixName=" + matrixName)
+            print("CheckTestMatrix. isEqual=" + str(isEqual))
+            print("CheckTestMatrix. matrix.size=" + str(matrix.shape))
+            print("CheckTestMatrix. correctMatrix.size=" + str(correctMatrix.shape))
+            print("CheckTestMatrix. correctMatrix.dtype=" + str(correctMatrix.dtype))
+            print("CheckTestMatrix. matrix.dtype=" + str(correctMatrix.dtype))
+            print("CheckTestMatrix. correctMatrix.type=" + str(type(correctMatrix).__name__))
+            print("CheckTestMatrix. matrix.type=" + str(type(matrix).__name__))
+            print("CheckTestMatrix. matrix=" + str(matrix))
+            print("CheckTestMatrix. correctMatrix=" + str(correctMatrix))
+            sys.exit(0)
 
-        isEqual = True        
-        for x in range(matrixSize[0]):
-            for y in range(matrixSize[1]):
-                #print("Check x=" + str(x) + ", y=" + str(y))
-                valA = round(float(matrix[x][y]), 4)
-                valB = round(float(correctMatrix[x][y]), 4)
-                #print("matrix[0][" + str(y) + "]=" + str(matrix[0][y]))
-                #print("correctMatrix[0][" + str(y) + "]=" + str(correctMatrix[0][y]))
-                #print("valA=" + str(valA) + ", valB=" + str(valB))
-                #if (float(matrix[0][y]) != float(correctMatrix[0][y])):
-                if (valA != valB):
-                    isEqual = False
-                    print("ERROR!!!!!!!! Different Matrix! testName=" + testName + ", matrixName=" + matrixName)
-                    print("Element [" + str(x) + "][" + str(y) + "] is different")
-                    print("matrix=" + str(matrix))
-                    print("correctMatrix=" + str(correctMatrix))
-                    print("type of valA=" + str(type(valA)))
-                    print("type of valB=" + str(type(valB)))
-                    sys.exit(0)
-                    break
+        #isEqual = True        
+        #for x in range(matrixSize[0]):
+        #    for y in range(matrixSize[1]):
+        #        #print("Check x=" + str(x) + ", y=" + str(y))
+        #        valA = round(float(matrix[x][y]), 4)
+        #        valB = round(float(correctMatrix[x][y]), 4)
+        #        #print("matrix[0][" + str(y) + "]=" + str(matrix[0][y]))
+        #        #print("correctMatrix[0][" + str(y) + "]=" + str(correctMatrix[0][y]))
+        #        #print("valA=" + str(valA) + ", valB=" + str(valB))
+        #        #if (float(matrix[0][y]) != float(correctMatrix[0][y])):
+        #        if (valA != valB):
+        #            isEqual = False
+        #            print("ERROR!!!!!!!! Different Matrix! testName=" + testName + ", matrixName=" + matrixName)
+        #            print("Element [" + str(x) + "][" + str(y) + "] is different")
+        #            print("matrix=" + str(matrix))
+        #            print("correctMatrix=" + str(correctMatrix))
+        #            print("type of valA=" + str(type(valA)))
+        #            print("type of valB=" + str(type(valB)))
+        #            sys.exit(0)
+        #            break
+
+        #print("CheckTestMatrix. OK")
     # End - CheckTestMatrix
 
 
@@ -1678,7 +1941,9 @@ class MLJob():
             return False,None,None
 
         weightStr = XMLTools_GetTextContents(weightXMLNode)
+        weightStr = weightStr.lstrip()
         biasStr = XMLTools_GetTextContents(biasXMLNode)
+        biasStr = biasStr.lstrip()
         #print("GetNeuralNetLinearUnitMatrices. weightStr=" + weightStr)
         #print("GetNeuralNetLinearUnitMatrices. biasStr=" + biasStr)
 
@@ -1692,44 +1957,6 @@ class MLJob():
 
 
      
-
-    #####################################################
-    #
-    # [MLJob::GetNeuralNetMatrix
-    # 
-    #####################################################
-    def GetNeuralNetMatrix(self, name):
-        matrixXMLNode = XMLTools_GetChildNode(self.NeuralNetMatrixListXMLNode, name)
-        if (matrixXMLNode == None):
-            return None
-
-        matrixStr = XMLTools_GetTextContents(matrixXMLNode)
-        resultMatrix = self.MLJob_ConvertStringTo2DMatrix(matrixStr)
-
-        return resultMatrix
-    # End - GetNeuralNetMatrix
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::GetNeuralNetVector
-    # 
-    #####################################################
-    def GetNeuralNetVector(self, name):
-        vectorXMLNode = XMLTools_GetChildNode(self.NeuralNetMatrixListXMLNode, name)
-        if (vectorXMLNode == None):
-            return None
-
-        vectorStr = XMLTools_GetTextContents(vectorXMLNode)
-        resultVector = MLJob_ConvertStringTo1DVector(vectorStr)
-
-        return resultVector
-    # End - GetNeuralNetVector
-
-
-
 
     #####################################################
     #
@@ -1751,13 +1978,34 @@ class MLJob():
 
         weightStr = self.MLJob_Convert2DMatrixToString(weightMatrix)
         biasStr = self.MLJob_Convert1DVectorToString(biasMatrix)
-
         #print("SetNeuralNetLinearUnitMatrices. weightStr=" + str(weightStr))
         #print("SetNeuralNetLinearUnitMatrices. biasStr=" + str(biasStr))
     
         XMLTools_SetTextContents(biasXMLNode, biasStr)
         XMLTools_SetTextContents(weightXMLNode, weightStr)
     # End - SetNeuralNetLinearUnitMatrices
+
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::GetNeuralNetMatrix
+    # 
+    #####################################################
+    def GetNeuralNetMatrix(self, name):
+        matrixXMLNode = XMLTools_GetChildNode(self.NeuralNetMatrixListXMLNode, name)
+        if (matrixXMLNode == None):
+            return None
+
+        matrixStr = XMLTools_GetTextContents(matrixXMLNode)
+        matrixStr = matrixStr.lstrip()
+
+        resultMatrix = self.MLJob_ConvertStringTo2DMatrix(matrixStr)
+
+        return resultMatrix
+    # End - GetNeuralNetMatrix
 
 
 
@@ -1776,6 +2024,27 @@ class MLJob():
         XMLTools_SetTextContents(matrixXMLNode, matrixStr)
     # End - SetNeuralNetMatrix
 
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::GetNeuralNetVector
+    # 
+    #####################################################
+    def GetNeuralNetVector(self, name):
+        vectorXMLNode = XMLTools_GetChildNode(self.NeuralNetMatrixListXMLNode, name)
+        if (vectorXMLNode == None):
+            return None
+
+        vectorStr = XMLTools_GetTextContents(vectorXMLNode)
+        vectorStr = vectorStr.lstrip()
+
+        resultVector = MLJob_ConvertStringTo1DVector(vectorStr)
+
+        return resultVector
+    # End - GetNeuralNetVector
 
 
 
@@ -1812,7 +2081,9 @@ class MLJob():
             return None,None
 
         weightStr = XMLTools_GetTextContents(weightXMLNode)
+        weightStr = weightStr.lstrip()
         biasStr = XMLTools_GetTextContents(biasXMLNode)
+        biasStr = biasStr.lstrip()
 
         weightMatrix = self.MLJob_ConvertStringTo2DMatrix(weightStr)
         biasMatrix = self.MLJob_ConvertStringTo1DVector(biasStr)
@@ -1894,6 +2165,7 @@ class MLJob():
 
         return(resultString)
     # End - MLJob_Convert1DVectorToString
+
 
 
 
@@ -2129,7 +2401,6 @@ def MLJob_UnitTest():
 #origLinearUnit = nn.Linear(inputSize, outputSize)
 #job.SetNeuralNetLinearUnitMatrices("test1", origLinearUnit.weight.detach().numpy(), origLinearUnit.bias.detach().numpy())
 #job.SaveAs(g_TestPathName)
-
 
 #newJob = MLJob_ReadExistingMLJob(g_TestPathName)
 #weightMatrix, biasMatrix = newJob.GetNeuralNetLinearUnitMatrices("test1")
