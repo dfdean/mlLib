@@ -73,6 +73,12 @@
 #  Text Contents: A human readable string that describes this data.
 #  Attributes: None
 #
+#  <DataType>
+#  Parent Element: Head
+#  Child Elements: None
+#  Text Contents: A human readable string that describes what this data is. For medical data, this includes "Patient", "Derived"
+#  Attributes: None
+#
 #  <DataSource>
 #  Parent Element: Head
 #  Child Elements: None
@@ -83,6 +89,12 @@
 #  Parent Element: Head
 #  Child Elements: None
 #  Text Contents: Contains the time and data that the file was generated
+#  Attributes: None
+#
+#  <Keywords>
+#  Parent Element: Head
+#  Child Elements: None
+#  Text Contents: Contains a comma-separated list of Keywords
 #  Attributes: None
 #
 #  <Events>
@@ -266,6 +278,8 @@
 #
 #       D - Detail 
 #           For Proc and Surg, this is CPT code
+#           For Medications, this is the dose, as a number
+#           For Micro, this is the fluid type
 #
 # Optional Attributes - These may be included in some Events of class "Admit"
 #       DiedInpt = T/F  Died During the Admission
@@ -307,6 +321,7 @@
 #       V - A series of name value pairs, in the form:
 #           name1=val1,name2=valw,name3=val3
 #           The values are numbers except in a few specific cases below.
+#
 #
 # For Vitals, the values are:
 #       TF - Temperature in Faranheit
@@ -360,10 +375,23 @@
 #       PCO2 - PCO2 (Arterial or Venous)
 #       BGSpO2 - O2 SAT
 #
+#       Drug Doses
+#       WarfarinDose - Warfarin dose (once daily)
+#       CycDose - Cyclosporine for daily dose
+#       CycDoseAM - Cyclosporine for AM dose
+#       CycDosePM - Cyclosporine for PM dose
+#       MTXDose - Daily dose, but may be given once weekly
+#       TacroDoseAM - Tacrolimus AM dose
+#       TacroDosePM - Tacrolimus PM dose
+#       TobraDose - Tobramycin total daily dose
+#       VancDose - Vancomycin total daily dose
+#       VoriDose - Vori total daily dose
+#
 #       Drug Levels
+#       VancLvl - Vancomycin Level Trough or Random
 #       TacLvl - Tacrolimus Level
-#       Sirolimus - Sirolimus Level
-#       GentLvl - Gentamicin Level (Random, Peak, Trough)
+#       SiroLvl - Sirolimus Level
+#       GentLvl - (Random, Peak, Trough)
 #       TobLvl - Tobramycin Level (Random, Peak, Trough)
 #       AmikLvl - Amikacin Level (Random, Peak, Trough)
 #       CycLvl - Cyclosporine Level
@@ -391,7 +419,6 @@
 #       TropHS - Troponin High Sensitivity
 #       Trop - Troponin T  (CTNT)
 #       INR - INR
-#       VancLvl - Vancomycin Level Trough or Random
 #       Procal - Procalcitonin
 #       A1c - Hemoglobin A1c
 #       CRP - C-Reactive Protein
@@ -419,7 +446,7 @@
 #
 #       Patient Characteristice
 #       IsCaucasian - The value is 0 or 1
-#       isMale - The value is 0 or 1
+#       IsMale - The value is 0 or 1
 #       WtKg
 #
 #       Time Values
@@ -442,7 +469,7 @@
 #       6 = EVENT will happen in 90 days
 #       7 = EVENT will happen in 180 days
 #       8 = EVENT will happen in 365 days
-#       9 = EVENT will happen in 730 days
+#       9 = EVENT will happen in 730 days (2yrs, some ESRD models use this)
 #       10 = EVENT will happen in 1095 days (3yrs)
 #       11 = EVENT will happen in 1825 days (5yrs, some ESRD models use this)
 #       12 = EVENT will happen in 3650 days (10yrs, Framingham uses this)
@@ -594,11 +621,12 @@
 
 import os
 import sys
-import shutil
-import random
-import time
-import re
 import math
+import random
+import statistics
+from scipy.stats import spearmanr, kendalltau, pearsonr
+import numpy as np
+import time
 import unicodedata
 import string
 import xml.dom
@@ -606,11 +634,9 @@ import xml.dom.minidom
 from xml.dom import minidom
 from xml.dom.minidom import parse, parseString
 from datetime import datetime
-from collections import deque
 
 import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 
 # Normally we have to set the search path to load these.
 # But, this .py file is always in the same directories as these imported modules.
@@ -625,12 +651,11 @@ NEWLINE_STR = "\n"
 # This is 0-based, so January is 0
 g_DaysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
-TDF_DATA_TYPE_FLOAT         = 0
-TDF_DATA_TYPE_INT           = 1
-TDF_DATA_TYPE_BOOL          = 1
-TDF_DATA_TYPE_FUTURE_EVENT  = 2
-
-TDF_NUM_CATEGORIES_IN_BOOLEAN_VAL = 2
+TDF_DATA_TYPE_INT                   = 0
+TDF_DATA_TYPE_FLOAT                 = 1
+TDF_DATA_TYPE_BOOL                  = 2
+TDF_DATA_TYPE_FUTURE_EVENT_CLASS    = 3
+TDF_DATA_TYPE_UNKNOWN               = -1
 
 # These are the values for a future event variable.
 TDF_FUTURE_EVENT_NOW_OR_PAST    = 0
@@ -651,8 +676,12 @@ TDF_FUTURE_EVENT_NOT_IN_10YRS   = 13
 TDF_NUM_CATEGORIES_IN_FUTURE_VAL = 14
 TDF_MAX_FUTURE_VAL = (TDF_NUM_CATEGORIES_IN_FUTURE_VAL - 1)
 
-
 MAX_PREVIOUS_LAB_EXTRA_PREVIOUS = 365
+MAX_PREVIOUS_LAB_EXTRA_FUTURE   = 60
+
+VARIABLE_START_OFFSET_MARKER    = "["
+VARIABLE_STOP_OFFSET_MARKER     = "]"
+
 
 
 ################################################################################
@@ -717,7 +746,7 @@ g_LabValueInfo = {'Hgb': {'minVal': 2.0, 'maxVal': 17.0, 'derived': 0, 'dataType
                 'Lac': {'minVal': 0.1, 'maxVal': 10.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'PT': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'PTT': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'INR': {'minVal': 1.0, 'maxVal': 10.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'INR': {'minVal': 1.0, 'maxVal': 7.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'TropHS': {'minVal': 1.0, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'Trop': {'minVal': 0.1, 'maxVal': 10.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'NTBNP': {'minVal': 50.0, 'maxVal': 200.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
@@ -734,16 +763,16 @@ g_LabValueInfo = {'Hgb': {'minVal': 2.0, 'maxVal': 17.0, 'derived': 0, 'dataType
 
                 # Drug levels
                 'VancLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'TacLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'TacLvl': {'minVal': 0.1, 'maxVal': 52.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'Sirolimus': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'GentLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'TobLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'TobLvl': {'minVal': 0.1, 'maxVal': 30.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'AmikLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'CycLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'MTXLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MTXLvl': {'minVal': 0.5, 'maxVal': 26.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'EveroLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'DigLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'VoriLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'VoriLvl': {'minVal': 0.1, 'maxVal': 12.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'GabapLvl': {'minVal': 0.1, 'maxVal': 100.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
 
                 # Derived values
@@ -760,6 +789,7 @@ g_LabValueInfo = {'Hgb': {'minVal': 2.0, 'maxVal': 17.0, 'derived': 0, 'dataType
                 'UPEPInterp': {'minVal': 1.0, 'maxVal': 10.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'SPEPInterp': {'minVal': 1.0, 'maxVal': 10.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
 
+                # Chronic Disease States
                 'MELD': {'minVal': 1.0, 'maxVal': 50.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'CKDStage': {'minVal': 1.0, 'maxVal': 5.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'BaselineCr': {'minVal': 0.3, 'maxVal': 8.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
@@ -776,51 +806,90 @@ g_LabValueInfo = {'Hgb': {'minVal': 2.0, 'maxVal': 17.0, 'derived': 0, 'dataType
                 'WtKg': {'minVal': 30.0, 'maxVal': 200.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'BMI': {'minVal': 15.0, 'maxVal': 50.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
 
+                # Med Doses
+                'WarfarinDose': {'minVal': 1.0, 'maxVal': 9.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'CycDose': {'minVal': 50.0, 'maxVal': 750.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'CycDoseAM': {'minVal': 50.0, 'maxVal': 750.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'CycDosePM': {'minVal': 50.0, 'maxVal': 750.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MTXDose': {'minVal': 5.0, 'maxVal': 50.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'TacroDoseAM': {'minVal': 1.0, 'maxVal': 10.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'TacroDosePM': {'minVal': 1.0, 'maxVal': 10.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'VancDose': {'minVal': 150.0, 'maxVal': 2000.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'TobraDose': {'minVal': 50.0, 'maxVal': 200.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'VoriDose': {'minVal': 100.0, 'maxVal': 600.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+
                 # Outcomes
-                'DiedInpt': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'DiedIn12Mos': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':""},
-                'ReadmitIn30Days': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 30, 'FuturePredictedValue':""},
-                'PreexistingMyeloma': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'DiagMyeloma': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'DiedInpt': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'DiedIn12Mos': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':""},
+                'ReadmitIn30Days': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 30, 'FuturePredictedValue':""},
+                'PreexistingMyeloma': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'DiagMyeloma': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'InHospital': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'InICU': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
 
                 # Patient Characteristice
-                'IsMale': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'IsCaucasian': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numValues': 2, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'IsMale': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'IsCaucasian': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+
+                # Future Events
+                'Future_Death': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 90, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_Admission': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 90, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_Discharge': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 7, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_RapidResponse': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_TransferIntoICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_TransferOutOfICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_Dialysis': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_Intubation': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 10, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_CKD5': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
+                'Future_CKD4': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
+                'Future_CKD3': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
+                'Future_MELD10': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
+                'Future_MELD20': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
+                'Future_MELD30': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
+                'Future_MELD40': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
+                'Future_Cirrhosis': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_ESLD': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
+                'Future_AKI': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':"Cr"},
+                'Future_AKIResolution': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':"Cr"},
+
 
                 # Time
                 'AgeInYrs': {'minVal': 18.0, 'maxVal': 90.0, 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
                 'AgeInDays': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-
-                # Future Events
-                'Future_Death': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 90, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_Admission': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 90, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_Discharge': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 7, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_RapidResponse': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_TransferIntoICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_TransferOutOfICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 14, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_Dialysis': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_Intubation': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 10, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_CKD5': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
-                'Future_CKD4': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
-                'Future_CKD3': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"CKDStage"},
-                'Future_MELD10': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
-                'Future_MELD20': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
-                'Future_MELD30': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
-                'Future_MELD40': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':"MELD"},
-                'Future_Cirrhosis': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 180, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_ESLD': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':ANY_EVENT_OR_VALUE},
-                'Future_AKI': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':"Cr"},
-                'Future_AKIResolution': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_VAL, 'derived': 1, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT, 'numValues': TDF_NUM_CATEGORIES_IN_FUTURE_VAL, 'numFutureDaysNeeded': 60, 'FuturePredictedValue':"Cr"},
-
+                'DaysSinceDialysis': {'minVal': -1.0, 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':""},
                 'LengthOfStay': {'minVal': 0.0, 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':""},
                 'DaysSinceStart': {'minVal': 0.0, 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
-                'DaysUntilStop': {'minVal': 0.0, 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':""}
+                'DaysUntilStop': {'minVal': 0.0, 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': -1, 'FuturePredictedValue':""},
+
+
+                # Events
+                'MostRecentDialysisDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentCardiacCathDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentIntubationDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentPEGDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentCABGDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentMajorSurgeryDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+                'MostRecentRapidResponseDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'derived': 1, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""},
+
+                # MetaData
+                'NewLabs': {'minVal': 0.0, 'maxVal': 1.0, 'derived': 0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue':""}
 }
 
 
 
 
+g_TDF_Log_Buffer = ""
 
+
+################################################################################
+#
+# [TDF_ClearLog]
+#
+################################################################################
+def TDF_ClearLog():
+    global g_TDF_Log_Buffer
+    g_TDF_Log_Buffer = ""
+# End - TDF_ClearLog
 
 
 
@@ -831,10 +900,22 @@ g_LabValueInfo = {'Hgb': {'minVal': 2.0, 'maxVal': 17.0, 'derived': 0, 'dataType
 #
 ################################################################################
 def TDF_Log(message):
-    #print("TDF_Log(" + g_LogFilePathName + "): " + textStr)
-    return
+    global g_TDF_Log_Buffer
+    g_TDF_Log_Buffer = g_TDF_Log_Buffer + "TDF: " + message + "\n"
 # End - TDF_Log
 
+
+
+
+################################################################################
+#
+# [TDF_GetLog]
+#
+################################################################################
+def TDF_GetLog():
+    global g_TDF_Log_Buffer
+    return(g_TDF_Log_Buffer)
+# End - TDF_GetLog
 
 
 
@@ -979,42 +1060,14 @@ def TDF_ParseTimeStampWithSecs(timeCode):
 
 
 
-#################################################################################
-#
-# [TDF_AddTimeToTimestamp]
-#
-################################################################################
-def TDF_AddTimeToTimestamp(timeCode, addDays, addHours):
-    words = timeCode.split(':')
-
-    valStr = words[0]
-    days = int(valStr)
-
-    valStr = words[1]
-    hours = int(valStr)
-
-    days = days + addDays
-    hours = hours + addHours
-    if (hours >= 24):
-        hours = 0
-        days += 1
-
-    valStr = words[2]
-    min = int(valStr)
-
-    resultStr = TDF_MakeTimeStamp(days, hours, min, -1)
-    return(resultStr)
-# End - TDF_AddTimeToTimestamp
-
-
-
-
-
-
 ################################################################################
 #
 # This is used only for writing a TDF File. Typically, it is used when importing 
 # data from some other format into TDF.
+#
+# BUGBUG FIXME - The TDF writer seems to emit text with < or > for some lab values.
+#
+# BUGBUG FIXME - The TDF writer seems to accidentally add the same drug several times.
 ################################################################################
 class TDFFileWriter():
     #####################################################
@@ -1037,14 +1090,16 @@ class TDFFileWriter():
 
     #####################################################
     #
-    # [TDFFileWriter::ShutdownDataSet]
+    # [TDFFileWriter::SaveAndClose]
     #
     # Called to explicitly release resources
-    # This method is inherited from IURenal_GenericDataSet:
     #####################################################
-    def Shutdown(self):
-        return
-    # End of ShutdownDataSet
+    def SaveAndClose(self):
+        self.outputFileH.flush()
+        self.outputFileH.close()
+    # End of SaveAndClose
+
+
 
 
     #####################################################
@@ -1057,40 +1112,28 @@ class TDFFileWriter():
     # End -  __SetFileOutputFileHandle__
 
 
-    #####################################################
-    #
-    # [TDFFileWriter::CopyHeader]
-    #
-    #####################################################
-    def CopyHeader(self, srcTDFFile):
-        comment = srcTDFFile.GetFileComment()
-        eventList = srcTDFFile.GetEventList()
-        dataValueList = srcTDFFile.GetDataValueList()
-
-        self.WriteHeader(comment, eventList, dataValueList)
-    # End of CopyHeader
-
-
 
     #####################################################
     #
     # [TDFFileWriter::WriteHeader]
     #
     #####################################################
-    def WriteHeader(self, comment, dataSourceStr, eventList, dataValueList):
+    def WriteHeader(self, comment, dataSourceStr, keywordStr):
         self.outputFileH.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + NEWLINE_STR)    
         self.outputFileH.write("<TDF version=\"1.0\">" + NEWLINE_STR)
+        self.outputFileH.write(NEWLINE_STR)
         self.outputFileH.write("<Head>" + NEWLINE_STR)
         self.outputFileH.write("    <Vocab>Medicine</Vocab>" + NEWLINE_STR)
         self.outputFileH.write("    <Description>" + comment + "</Description>" + NEWLINE_STR)        
         self.outputFileH.write("    <DataSource>" + dataSourceStr + "</DataSource>" + NEWLINE_STR)
         self.outputFileH.write("    <Created>" + datetime.today().strftime('%b-%d-%Y') + " " 
                 + datetime.today().strftime('%H:%M') + "</Created>" + NEWLINE_STR)
-        self.outputFileH.write("    <Events>" + eventList + "</Events>" + NEWLINE_STR)        
-        self.outputFileH.write("    <DataValues>" + dataValueList + "</DataValues>" + NEWLINE_STR)        
+        self.outputFileH.write("    <Keywords>" + keywordStr + "</Keywords>" + NEWLINE_STR)        
         self.outputFileH.write("</Head>" + NEWLINE_STR)    
+        self.outputFileH.write(NEWLINE_STR)
         self.outputFileH.write("<PatientList>" + NEWLINE_STR)    
     # End of WriteHeader
+
 
 
 
@@ -1100,10 +1143,11 @@ class TDFFileWriter():
     #
     #####################################################
     def WriteFooter(self):
-        self.outputFileH.write("</PatientList>" + NEWLINE_STR)    
-        self.outputFileH.write("</TDF>" + NEWLINE_STR)
+        self.outputFileH.write(NEWLINE_STR + "</PatientList>" + NEWLINE_STR)    
+        self.outputFileH.write(NEWLINE_STR + "</TDF>" + NEWLINE_STR)
         self.outputFileH.write(NEWLINE_STR + NEWLINE_STR)
     # End of WriteFooter
+
 
 
 
@@ -1114,7 +1158,7 @@ class TDFFileWriter():
     #####################################################
     def WriteXMLNode(self, xmlNode):
         #print("Starting WriteXMLNode")
-        bytesStr = xmlNode.toprettyxml(indent='    ', newl='', encoding="utf-8")
+        bytesStr = xmlNode.toprettyxml(indent='  ', newl='', encoding="utf-8")
         textStr = bytesStr.decode("utf-8", "strict")  
 
         self.outputFileH.write(NEWLINE_STR + NEWLINE_STR)
@@ -1130,7 +1174,16 @@ class TDFFileWriter():
     #
     ################################################################################
     def StartPatientNode(self, patientID, gender, race):
-        textStr = NEWLINE_STR + "<Patient id=\"" + str(patientID) + "\" gender=\"" + gender + "\" race=\"" + race + "\">" + NEWLINE_STR
+        textStr = NEWLINE_STR + NEWLINE_STR + "<Patient"
+        textStr = textStr + " id=\"" + str(patientID) + "\""
+
+        if ((gender != None) and (gender != "")):
+            textStr = textStr + " gender=\"" + gender + "\""
+
+        if ((race != None) and (race != "")):
+            textStr = textStr + " race=\"" + race + "\""
+
+        textStr = textStr + ">" + NEWLINE_STR
 
         self.outputFileH.write(textStr)
     # End - StartPatientNode
@@ -1155,8 +1208,29 @@ class TDFFileWriter():
     # [TDFFileWriter::WriteOutcomesNode]
     #
     ################################################################################
-    def WriteOutcomesNode(self, diedDuringAdmission, diedIn12MonthsStr, akiStr, ckdStr, esrdStr, hepatitisStr, cirrhosisStr, esldStr):
-        textStr = "    <OC scope=\"Admit\">" + "DiedInpt=\"" + diedDuringAdmission + "\"" + " DiedIn12Mos=\"" + diedIn12MonthsStr + "\"" + " AKI=\"" + akiStr + "\"" + " CKD=\"" + ckdStr + "\"" + " ESRD=\"" + esrdStr + "\"" + " Hepatitis=\"" + hepatitisStr + "\"" + " Cirrhosis=\"" + cirrhosisStr + "\"" + " ESLD=\"" + esldStr + "\"" + "</OC>" + NEWLINE_STR
+    def WriteOutcomesNode(self, diedDuringAdmission, diedIn12MonthsStr, readmit30D, 
+                        akiStr, ckdStr, esrdStr, hepatitisStr, cirrhosisStr, esldStr):
+
+        textStr = "    <OC scope=\"Admit\">" 
+        if ((diedDuringAdmission != None) and (diedDuringAdmission != "")):
+            textStr = textStr + "DiedInpt=\"" + diedDuringAdmission + "\""
+        if ((diedIn12MonthsStr != None) and (diedIn12MonthsStr != "")):
+            textStr = textStr + " DiedIn12Mos=\"" + diedIn12MonthsStr + "\"" 
+        if ((readmit30D != None) and (readmit30D != "")):
+            textStr = textStr + " Readmit30D=\"" + readmit30D + "\"" 
+        if ((akiStr != None) and (akiStr != "")):
+            textStr = textStr + " AKI=\"" + akiStr + "\""
+        if ((ckdStr != None) and (ckdStr != "")):
+            textStr = textStr + " CKD=\"" + ckdStr + "\""
+        if ((esrdStr != None) and (esrdStr != "")):
+            textStr = textStr + " ESRD=\"" + esrdStr + "\"" 
+        if ((hepatitisStr != None) and (hepatitisStr != "")):
+            textStr = textStr + " Hepatitis=\"" + hepatitisStr + "\""
+        if ((cirrhosisStr != None) and (cirrhosisStr != "")):
+            textStr = textStr + " Cirrhosis=\"" + cirrhosisStr + "\"" 
+        if ((esldStr != None) and (esldStr != "")):
+            textStr = textStr + " ESLD=\"" + esldStr + "\""
+        textStr = textStr + "</OC>" + NEWLINE_STR
 
         self.outputFileH.write(textStr)
     # End - WriteOutcomesNode
@@ -1169,18 +1243,29 @@ class TDFFileWriter():
     # [TDFFileWriter::WriteDataNode]
     #
     ################################################################################
-    def WriteDataNode(self, classStr, timeStampStr, valueStr):
-        # Remove characters that interfere with parsing xml or numbers.
-        # Some labs that exceed a threshold may be written as ">10"
-        valueStr = valueStr.replace('>', '') 
-        valueStr = valueStr.replace('<', '') 
-        valueStr = valueStr.replace('-', '') 
-        valueStr = valueStr.replace('+', '') 
-        valueStr = valueStr.replace(' ', '') 
+    def WriteDataNode(self, classStr, timeStampStr, calendarTimeStr, valueStr):
+        str = "    <D C=\"" + classStr + "\" T=\"" + timeStampStr + "\""
 
-        str = "    <D C=\"" + classStr + "\" T=\"" + timeStampStr + "\">" + valueStr + "</D>" + NEWLINE_STR
+        if ((calendarTimeStr != None) and (calendarTimeStr != "")):
+            # Remove characters that would create an invalid XML file.
+            calendarTimeStr = calendarTimeStr.replace('>', '') 
+            calendarTimeStr = calendarTimeStr.replace('<', '') 
+            calendarTimeStr = calendarTimeStr.replace("=", "")
+            calendarTimeStr = calendarTimeStr.replace("+", "")
+            calendarTimeStr = calendarTimeStr.replace("-", "")
+            calendarTimeStr = calendarTimeStr.replace(" ", "")
+            str = str + " CT=\"" + calendarTimeStr + "\""
+
+        valueStr = valueStr.replace('>', '')
+        valueStr = valueStr.replace('<', '')
+        valueStr = valueStr.replace("+", "")
+        valueStr = valueStr.replace("-", "")
+        valueStr = valueStr.replace(" ", "")
+
+        str = str + ">" + valueStr + "</D>" + NEWLINE_STR
         self.outputFileH.write(str)
     # End - WriteDataNode
+
 
 
 
@@ -1190,20 +1275,105 @@ class TDFFileWriter():
     # [TDFFileWriter::WriteEventNode]
     #
     ################################################################################
-    def WriteEventNode(self, eventType, timeStampStr, extraAttributeName, extraAttributeValue):
+    def WriteEventNode(self, eventType, timeStampStr, calendarTimeStr, valueStr, detailStr):
         str = "    <E C=\"" + eventType + "\" T=\"" + timeStampStr + "\""
 
-        if ((extraAttributeName != "") and (extraAttributeValue != "")):
-            # Remove characters that interfere with parsing xml or numbers.
-            # Some labs that exceed a threshold may be written as ">10"
-            extraAttributeValue = extraAttributeValue.replace('>', '') 
-            extraAttributeValue = extraAttributeValue.replace('<', '') 
-            str = str + " " + extraAttributeName + "=\"" + extraAttributeValue + "\""
+        if ((calendarTimeStr != None) and (calendarTimeStr != "")):
+            # Remove characters that would create an invalid XML file.
+            calendarTimeStr = calendarTimeStr.replace('>', '') 
+            calendarTimeStr = calendarTimeStr.replace('<', '') 
+            calendarTimeStr = calendarTimeStr.replace("=>", "")
+            str = str + " CT=\"" + calendarTimeStr + "\""
+
+        if ((valueStr != None) and (valueStr != "")):
+            # Remove characters that would create an invalid XML file.
+            valueStr = valueStr.replace('>', '') 
+            valueStr = valueStr.replace('<', '') 
+            str = str + " V=\"" + valueStr + "\""
+
+        if ((detailStr != None) and (detailStr != "")):
+            # Remove characters that would create an invalid XML file.
+            detailStr = detailStr.replace('>', '') 
+            detailStr = detailStr.replace('<', '') 
+            str = str + " D=\"" + detailStr + "\""
 
         str = str + " />" + NEWLINE_STR
 
         self.outputFileH.write(str)
     # End - WriteEventNode
+
+
+
+
+    ################################################################################
+    # 
+    # [TDFFileWriter::WriteTextNode]
+    #
+    ################################################################################
+    def WriteTextNode(self, textType, extraAttributeName, extraAttributeValue, textStr):
+        # Remove characters that would create an invalid XML file.
+        textStr = textStr.replace('>', '') 
+        textStr = textStr.replace('<', '') 
+        textStr = textStr.replace("=<", "")
+        textStr = textStr.replace("=", "")
+        textStr = textStr.replace("=>", "")
+
+        str = "    <Text C=\"" + textType + "\""
+        if ((extraAttributeName != "") and (extraAttributeValue != "")):
+            str = str + " " + extraAttributeName + "=\"" + extraAttributeValue + "\""
+        str = str + ">"
+
+        str = str + textStr + "</Text>" + NEWLINE_STR
+
+        self.outputFileH.write(str)
+    # End - WriteTextNode
+
+
+
+
+    ################################################################################
+    # 
+    # [TDFFileWriter::AppendNameValuePairToStr]
+    #
+    # isinstance(test_string, str)
+    ################################################################################
+    def AppendNameValuePairToStr(self, totalStr, name, valueStr):
+        saveName = name
+        saveValueStr = valueStr
+        saveTotalStr = totalStr
+
+        if ((name == None) or (valueStr == None)):
+            print("Error. AppendNameValuePairToStr discarding NONE name or value str")
+            return(totalStr)
+
+        #name = name.lstrip()
+        #valueStr = valueStr.lstrip()
+        valueStr = valueStr.replace('>', '') 
+        valueStr = valueStr.replace('<', '') 
+        valueStr = valueStr.replace("=", "")
+        valueStr = valueStr.replace("+", "")
+        valueStr = valueStr.replace("-", "")
+        valueStr = valueStr.replace(" ", "")
+
+        if (name == ""):
+            print("Error. AppendNameValuePairToStr discarding empty name str")
+            return(totalStr)    
+
+        if (valueStr == ""):
+            print("Error. AppendNameValuePairToStr discarding empty value str")
+            return(totalStr)    
+
+        try:
+            floatVal = float(valueStr)
+        except:
+            print("Error. AppendNameValuePairToStr discarding non-numeric valueStr: " + str(valueStr))
+            return(totalStr)    
+
+        totalStr = totalStr + name + "=" + valueStr + ","
+
+        return(totalStr)
+    # End - AppendNameValuePairToStr
+
 
 # End - class TDFFileWriter
 
@@ -1230,6 +1400,8 @@ class TDFFileReader(Dataset):
     def __init__(self, tdfFilePathName):
         #print("TDFFileReader.__init__. Pathname = " + tdfFilePathName)
         super(TDFFileReader, self).__init__()
+        self.m_DebugMode = False
+        self.m_DebugLevel = 0
 
         ###################
         # Open the file.
@@ -1239,7 +1411,9 @@ class TDFFileReader(Dataset):
         try:
             self.fileHandle = open(self.tdfFilePathName, 'rb') 
         except:
-            print("Error from opening Lab file. File=" + filePathName)
+            print("Error from opening TDF file. File=" + self.tdfFilePathName)
+            print("Exiting process...")
+            sys.exit(0)
             return
         self.lineNum = 0
 
@@ -1290,12 +1464,12 @@ class TDFFileReader(Dataset):
             self.headerXMLDOM = parseString(self.fileHeaderStr)
         except xml.parsers.expat.ExpatError as err:
             print("TDFFileReader::__init__. Error from parsing string:")
-            print("[" + self.fileHeaderStr + "]")
+            #print("[" + self.fileHeaderStr + "]")
             print("ExpatError:" + str(err))
             sys.exit(0)
         except:
             print("TDFFileReader::__init__. Error from parsing string:")
-            print("[" + self.fileHeaderStr + "]")
+            #print("[" + self.fileHeaderStr + "]")
             print("Unexpected error:", sys.exc_info()[0])
             sys.exit(0)
 
@@ -1306,6 +1480,7 @@ class TDFFileReader(Dataset):
         self.currentPatientNodeStr = ""
         self.startNodeInCurrentWindow = None
         self.lastNodeInCurrentWindow = None
+        self.LastTimeLineIndex = -1
         #self.GotoFirstPatient()
     # End -  __init__
 
@@ -1330,7 +1505,6 @@ class TDFFileReader(Dataset):
     # Public Procedure
     #
     # Called to explicitly release resources
-    # This method is inherited from IURenal_GenericDataSet:
     #####################################################
     def Shutdown(self):
         try:
@@ -1338,6 +1512,19 @@ class TDFFileReader(Dataset):
         except:
             pass
     # End of Shutdown
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::SetDebugMode]
+    # Public Procedure
+    #
+    #####################################################
+    def SetDebugMode(self, newMode):
+        self.m_DebugMode = newMode
+    # End of SetDebugMode
 
 
 
@@ -1421,6 +1608,20 @@ class TDFFileReader(Dataset):
 
 
 
+
+    #####################################################
+    #
+    # [TDFFileReader::GetXMLNodeForCurrentPatient]
+    # Public Procedure
+    #
+    #####################################################
+    def GetXMLNodeForCurrentPatient(self):
+        return self.currentPatientNode
+    # End - GetXMLNodeForCurrentPatient(self)
+
+
+
+
     #####################################################
     #
     # [TDFFileReader::GetFileDescriptionStr]
@@ -1434,6 +1635,9 @@ class TDFFileReader(Dataset):
             return("")
 
         str = XMLTools_GetTextContents(commentNode)
+        if (str == None):
+            return("")
+
         return(str)
     # End of GetFileDescriptionStr
 
@@ -1453,7 +1657,7 @@ class TDFFileReader(Dataset):
     #
     #####################################################
     def GotoFirstPatient(self):
-        #TDF_Log("GotoFirstPatient.")
+        #print("GotoFirstPatient.")
         self.fileHandle.seek(0, 0)
 
         # Advance in the file to the start of the patient list
@@ -1689,6 +1893,10 @@ class TDFFileReader(Dataset):
                 fStartedPatientSection = True
 
             if (fStartedPatientSection):
+                # <> BUGBUG FIXME - Move this str.replace() into the code
+                # that generates a TDF from the source data. Maybe in TDFWriter.
+                currentLine = currentLine.replace("=<", "")
+                # <> End of FIXME
                 self.currentPatientNodeStr += currentLine
 
             # Stop when we have read the entire patient.
@@ -1726,12 +1934,12 @@ class TDFFileReader(Dataset):
             self.currentPatientXMLDOM = parseString(self.currentPatientNodeStr)
         except xml.parsers.expat.ExpatError as err:
             print("ParseCurrentPatientImpl. Error from parsing string:")
-            print("[" + self.currentPatientNodeStr + "]")
+            #print("[" + self.currentPatientNodeStr + "]")
             print("ExpatError:" + str(err))
             sys.exit(0)
         except:
             print("ParseCurrentPatientImpl. Error from parsing string:")
-            print("[" + self.currentPatientNodeStr + "]")
+            #print("[" + self.currentPatientNodeStr + "]")
             print("Unexpected error:", sys.exc_info()[0])
             sys.exit(0)
         self.currentPatientNode = self.currentPatientXMLDOM.getElementsByTagName("Patient")[0]
@@ -1744,6 +1952,8 @@ class TDFFileReader(Dataset):
         else:
             self.CurrentIsMale = 0
         self.CurrentRaceStr = self.currentPatientNode.getAttribute("race")
+        if (self.CurrentRaceStr == ""):
+            self.CurrentRaceStr = "C"
 
         self.CurrentWtInKg = -1
         wtInKgStr = self.currentPatientNode.getAttribute("wt")
@@ -1807,8 +2017,18 @@ class TDFFileReader(Dataset):
         self.startNodeInCurrentWindow = firstNode
         self.lastNodeInCurrentWindow = lastNode
 
-        self.startTimeLineIDInCurrentWindow = int(firstNode.getAttribute("xID"))
-        self.lastTimeLineIDInCurrentWindow = int(lastNode.getAttribute("xID"))
+        xidStr = firstNode.getAttribute("xID")
+        if ((xidStr != "") and (xidStr != None)):
+            self.startTimeLineIDInCurrentWindow = int(xidStr)
+        else:
+            self.startTimeLineIDInCurrentWindow = -1
+
+        xidStr = lastNode.getAttribute("xID")
+        if ((xidStr != "") and (xidStr != None)):
+            self.lastTimeLineIDInCurrentWindow = int(xidStr)
+        else:
+            self.lastTimeLineIDInCurrentWindow = -1
+
         #print("self.startTimeLineIDInCurrentWindow=" + str(self.startTimeLineIDInCurrentWindow))
         #print("self.lastTimeLineIDInCurrentWindow=" + str(self.lastTimeLineIDInCurrentWindow))
             
@@ -1984,39 +2204,92 @@ class TDFFileReader(Dataset):
 
     #####################################################
     #
-    # [TDFFileReader::GetDataFromCurrentWindow]
-    #
-    # This returns two tensors:
-    #   - The first is a tensor of inputs. This is an NxM array
-    #           Each column is 1 timestep, and each array is one input variable.
-    #
-    #   - The second is an array of results. This is an Nx1 array.
-    #           It is the result at each time step
-    #
-    # This method is NOT part of DataSet - it is a special iterator
-    # Notice, we iterate over BOTH patients and dataNodes within a patient.
-    #
-    #
-    # dataTypeName has values:
-    #   "NormFraction" 
-    #   "NormInt0-100"
+    # [TDFFileReader::ParseSingleVariable]
     #
     #####################################################
-    def GetDataFromCurrentWindow(self, inputValueFormatStr, resultValueName, 
-                                dataTypeName, minIntervalInHours):
-        #print("====================================GetDataFromCurrentWindow, start")
-        #TDF_Log("Enter GetDataFromCurrentWindow")
-        #TDF_LogMemoryInfo()
+    def ParseSingleVariable(self, valueName):
+        nameStem = valueName
+        valueOffset = 0
+        if (VARIABLE_START_OFFSET_MARKER in valueName):
+            nameParts = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)
+            nameStem = nameParts[0]
+            valueOffsetStr = nameParts[1]
+            valueOffsetStr = valueOffsetStr.split(VARIABLE_STOP_OFFSET_MARKER, 1)[0]
+            valueOffsetStr = valueOffsetStr.lower()
+            valueOffset = int(valueOffsetStr)
+        #print("nameStem = " + nameStem)
+        #print("valueOffset = " + str(valueOffset))
 
+        if (not (nameStem in g_LabValueInfo)):
+            print("nameStem(" + nameStem + ") not in g_LabValueInfo")
+            return None, None, 0
+        labInfo = g_LabValueInfo[nameStem]
+
+        return labInfo, nameStem, valueOffset
+    # End - ParseSingleVariable
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::ParseVariables]
+    #
+    #####################################################
+    def ParseVariables(self, inputValueNameList, numValsInEachInputVector, resultValueName):
+        # Get information about the result
+        resultLabInfo, resultValueStem, resultValueOffset = self.ParseSingleVariable(resultValueName)
+        if (resultLabInfo == None):
+            print("resultValueStem(" + resultValueStem + ") not in g_LabValueInfo")
+            return None, None, None, None, None
+
+        inputValueOffsets = [0] * numValsInEachInputVector
+
+        # A single name may have the form "foo" or "foo[n]" where n is an offset.
+        # Split the names into name stems and optional offsets
+        earliestOffset = 0
+        for valueIndex, valueName in enumerate(inputValueNameList):
+            #print("valueName = " + valueName)
+            #print("valueIndex = " + str(valueIndex))
+            if (VARIABLE_START_OFFSET_MARKER in valueName):
+                valueNameStem = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+                valueNameIndexStr = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[1]
+                valueNameIndexStr = valueNameIndexStr.split(VARIABLE_STOP_OFFSET_MARKER, 1)[0]
+                offset = int(valueNameIndexStr)
+                if (offset < earliestOffset):
+                    earliestOffset = offset
+                inputValueNameList[valueIndex] = valueNameStem
+                inputValueOffsets[valueIndex] = offset
+                #print("valueNameStem = " + valueNameStem)
+                #print("valueNameIndexStr = " + valueNameIndexStr)
+        # End - for valueIndex, valueName in enumerate(inputValueNameList):
+
+        #print("Show Offsets to Value Names")
+        #for valueIndex, valueName in enumerate(inputValueNameList):
+        #    #print("valueIndex = " + str(valueIndex))
+        #    print("valueName = " + valueName)
+        #    print("valueOffset = " + str(inputValueOffsets[valueIndex]))
+        # End - for valueIndex, valueName in enumerate(inputValueNameList):
+        #print("earliestOffset = " + str(earliestOffset))
+
+        return inputValueNameList, inputValueOffsets, resultLabInfo, resultValueStem, resultValueOffset
+    # End - ParseVariables
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetBoundsForDataFetch]
+    #
+    #####################################################
+    def GetBoundsForDataFetch(self, resultLabInfo):
         # By default, we will read the entire window.
         firstTimelineID = self.startTimeLineIDInCurrentWindow
         lastTimelineID = self.lastTimeLineIDInCurrentWindow
-
-        # Get information about the results
-        if (not (resultValueName in g_LabValueInfo)):
-            return 0, None, None
-        resultLabInfo = g_LabValueInfo[resultValueName]
-        NameOfFutureLabValue = resultLabInfo['FuturePredictedValue']
 
         # If this result assumes that we will know a future outcome (most results do), then 
         # make sure we only include data points that know whether the future outcome happened.
@@ -2024,6 +2297,7 @@ class TDFFileReader(Dataset):
         # If we need to predict a result N days in the future, then do not return data that cannot
         # accurately know that in the future.
         # This loop will iterate over each step in the timeline.
+        NameOfFutureLabValue = resultLabInfo['FuturePredictedValue']
         if (NameOfFutureLabValue != ""):
             numFutureDaysNeeded = int(resultLabInfo['numFutureDaysNeeded'])
             #print("Clipping. NameOfFutureLabValue=" + NameOfFutureLabValue)
@@ -2045,7 +2319,7 @@ class TDFFileReader(Dataset):
             # End - while (latestTimeLineIndex >= firstTimelineID)
 
             if (futureDayNum < 0):
-                return 0, None, None
+                return -1, -1
     
             # Clip to a date that can predict sufficiently far ahead.        
             while (lastTimelineID >= firstTimelineID):
@@ -2059,9 +2333,270 @@ class TDFFileReader(Dataset):
             # End - while (lastTimelineID >= firstTimelineID):
 
             if (lastTimelineID < firstTimelineID):
-                return 0, None, None    
+                return -1, -1   
         # End - if (NameOfFutureLabValues != ""):
 
+        return firstTimelineID, lastTimelineID
+    # End - GetBoundsForDataFetch
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetNamedValueFromTimeline]
+    #
+    # BUGUG FIXME <> If this is called with several different offsets, 
+    # like -1, then -3, then -5, it may return the *same* past timepoint
+    # for all of them. 
+    #####################################################
+    def GetNamedValueFromTimeline(self, valueName, offset, timeLineIndex, timelineEntry, currentDayNum):
+        ############################
+        # This is the simple case, we want a value from the current position in the timeline
+        if (offset == 0):
+            try:
+                latestValues = timelineEntry['data']
+                result = latestValues[valueName]
+                #print("latestValues = " + str(latestValues))
+                #print("result = " + str(result))
+                return True, result
+            except:
+                return False, -1
+        # End - if (offset == 0):
+
+        
+        targetDayNum = currentDayNum + offset
+        #print("GetNamedValueFromTimeline. targetDayNum=" + str(targetDayNum) + ", currentDayNum=" + str(currentDayNum))
+
+        ############################
+        # If offset<0, then we want a value from a previous position in the timeline.
+        if (offset < 0):
+            # We may search to before the current window. That is ok.
+            # The point of a past lab value is to get a trend, or baseline, and
+            # that should not be clipped to a single event, like one hospital admission.
+            pastTimeLineIndex = timeLineIndex
+            while (pastTimeLineIndex >= 0):
+                pastTimelineEntry = self.CompiledTimeline[pastTimeLineIndex]
+                pastDayNum = pastTimelineEntry['TimeDays']
+                #print("GetNamedValueFromTimeline. pastDayNum=" + str(pastDayNum))
+                if (pastDayNum <= targetDayNum):
+                    # Don't do anything if we are too far back. If I want a lab from
+                    # 30 days before now, don't confuse this with a lab 6 years ago.
+                    if ((targetDayNum - pastDayNum) >= MAX_PREVIOUS_LAB_EXTRA_PREVIOUS):
+                        #print("GetNamedValueFromTimeline. Too far back. pastDayNum=" + str(pastDayNum))
+                        return False, -1
+
+                    pastLabValues = pastTimelineEntry['data']
+                    if (valueName in pastLabValues):
+                        #print("GetNamedValueFromTimeline. valueName is in prevDay. pastDayNum=" + str(pastDayNum))
+                        result = pastLabValues[valueName]
+                        return True, result
+                # End - if (pastDayNum <= targetDayNum):
+
+                pastTimeLineIndex = pastTimeLineIndex - 1
+            # End - while (pastTimeLineIndex >= 0):
+        # End - if (offset < 0):
+
+
+        ############################
+        # If offset>0, then we want a value from a future position in the timeline.
+        if (offset > 0):
+            # We may search past the current window. That is ok.
+            futureTimeLineIndex = timeLineIndex
+
+            while (futureTimeLineIndex <= self.LastTimeLineIndex):
+                futureTimelineEntry = self.CompiledTimeline[futureTimeLineIndex]
+                futureDayNum = futureTimelineEntry['TimeDays']
+                #print("GetNamedValueFromTimeline. futureDayNum=" + str(futureDayNum))
+
+                if (futureDayNum >= targetDayNum):
+                    # Don't do anything if we are too far ahead. If I want a lab from
+                    # 3 days after now, don't confuse this with a lab 6 years in the future
+                    if ((futureDayNum - targetDayNum) >= MAX_PREVIOUS_LAB_EXTRA_FUTURE):
+                        #print("GetNamedValueFromTimeline. Too far ahead. futureDayNum=" + str(futureDayNum))
+                        return False, -1
+
+                    futureLabValues = futureTimelineEntry['data']
+                    if (valueName in futureLabValues):
+                        #print("GetNamedValueFromTimeline. valueName is in future. futureDayNum=" + str(futureDayNum))
+                        result = futureLabValues[valueName]
+                        return True, result
+                # End - if (futureDayNum >= targetDayNum):
+
+                futureTimeLineIndex = futureTimeLineIndex + 1
+            # End - while (futureTimeLineIndex <= self.lastTimeLineIDInCurrentWindow):
+        # End - if (offset > 0):
+
+
+        return False, -1
+    # End - GetNamedValueFromTimeline
+
+
+
+
+
+
+
+    #####################################################
+    #####################################################
+    def CheckIfCurrentTimeMeetsCriteria(self, numProperties, 
+                                            propertyRelationList, 
+                                            propertyNameList, 
+                                            propertyValueList, 
+                                            timeLineIndex,
+                                            timelineEntry,
+                                            currentDayNum):
+        for propNum in range(numProperties):
+            valueOffset = 0
+            #print("CheckIfCurrentTimeMeetsCriteria: valueName=" + str(propertyNameList[propNum]))
+            valueName = propertyNameList[propNum]
+            targetVal = float(propertyValueList[propNum])
+
+            try:
+               labInfo = g_LabValueInfo[valueName]
+            except:
+                print("Error! CheckIfCurrentTimeMeetsCriteria found undefined lab name: " + valueName)
+                return(False)
+
+            foundIt, actualVal = self.GetNamedValueFromTimeline(valueName, valueOffset, timeLineIndex, timelineEntry, currentDayNum)
+            if (not foundIt):
+                return(False)
+            #print("CheckIfCurrentTimeMeetsCriteria: targetVal=" + str(targetVal))
+            #print("CheckIfCurrentTimeMeetsCriteria: actualVal=" + str(actualVal))
+            #print("CheckIfCurrentTimeMeetsCriteria: foundIt=" + str(foundIt))
+            dataTypeName = labInfo['dataType']
+            #print("CheckIfCurrentTimeMeetsCriteria: dataTypeName=" + str(dataTypeName))
+
+            ###############
+            if (propertyRelationList[propNum] == "="):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) != float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) != int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            elif (propertyRelationList[propNum] == "!="):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) == float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) == int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            elif (propertyRelationList[propNum] == ".LT."):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) >= float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) >= int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            elif (propertyRelationList[propNum] == ".LTE."):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) > float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) > int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            elif (propertyRelationList[propNum] == ".GT."):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) <= float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) <= int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            elif (propertyRelationList[propNum] == ".GTE."):
+                if (dataTypeName == TDF_DATA_TYPE_FLOAT):
+                    if (float(actualVal) < float(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+                elif ((dataTypeName == TDF_DATA_TYPE_INT) or (dataTypeName == TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
+                    if (int(actualVal) < int(targetVal)):
+                        #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                        return(False)
+            ###############
+            else:
+                #print("CheckIfCurrentTimeMeetsCriteria: targetVal does not match required value")
+                return(False)
+
+            #print("CheckIfCurrentTimeMeetsCriteria: targetVal does indeed match required value")
+        # End - for propNum in range(numProperties):
+
+        return(True)
+    # End - CheckIfCurrentTimeMeetsCriteria
+
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetDataFromCurrentWindow]
+    #
+    # This returns two tensors:
+    #   - The first is a tensor of inputs. This is an NxM array
+    #           Each column is 1 timestep, and each array is one input variable.
+    #
+    #   - The second is an array of results. This is an Nx1 array.
+    #           It is the result at each time step
+    #
+    # This method is NOT part of DataSet - it is a special iterator
+    # Notice, we iterate over BOTH patients and dataNodes within a patient.
+    #
+    #
+    # dataTypeName has values:
+    #   "NormFraction" 
+    #   "NormInt0-100"
+    #
+    #####################################################
+    def GetDataFromCurrentWindow(self, 
+                                inputValueFormatStr, 
+                                resultValueName, 
+                                resultDataTypeName, 
+                                numRequireProperties,
+                                requirePropertyRelationList,
+                                requirePropertyNameList,
+                                requirePropertyValueList,
+                                minIntervalInHours):
+        #print("====================================GetDataFromCurrentWindow, start")
+        TDF_Log("Enter GetDataFromCurrentWindow")
+        #TDF_LogMemoryInfo()
+
+        # Parse the value name list. These are the elements of each tensor
+        inputValueNameList = inputValueFormatStr.split(',')
+        numValsInEachInputVector = len(inputValueNameList)      
+
+        # Get information about the requested variables. This splits
+        # complicated name values like "eGFR[-30]" into a name and an 
+        # offset, like "eGFR" and "-30"
+        inputValueNameList, inputValueOffsets, resultLabInfo, resultName, resultValueOffset = self.ParseVariables(inputValueNameList, 
+                                                                        numValsInEachInputVector, 
+                                                                        resultValueName)
+        if (None == resultLabInfo):
+            return 0, None, None
+
+        # Find where we will look for the data. We may not consider data values
+        # that run right up to the end.        
+        firstTimelineID, lastTimelineID = self.GetBoundsForDataFetch(resultLabInfo)
+        if (firstTimelineID < 0):
+            return 0, None, None
 
         # Count the max possible number of complete data nodes.
         # We will return less than this, but this lets us allocate result storage.
@@ -2070,51 +2605,19 @@ class TDFFileReader(Dataset):
             #TDF_Log("GetDataFromCurrentWindow, No data")
             return 0, None, None
 
-        # Parse the value name list. These are the elements of each tensor
-        inputValueNameList = inputValueFormatStr.split(',')
-        numValsInEachInputVector = len(inputValueNameList)      
-
-
-
-        # Find the number of values that require past data.
-        # <><><>xxxxxxxxxxx
-        # <> BUGBUG FIXME This is the fix for the problem below. 
-        # Currently, we look at backward values for each forward step. 
-        # That is pretty slow, almost n**2. 
-        pastTimeInputVarList = []
-        for valueIndex, valueName in enumerate(inputValueNameList):
-            if ("-" in valueName):
-                try:
-                    namePartList = valueName.split('-')
-                    valueName = namePartList[0]              
-                    daysoffset = int(namePartList[1])
-                    pastValueInfo = {}
-                    pastValueInfo['Name'] = valueName
-                    pastValueInfo['daysoffset'] = daysoffset
-                    pastTimeInputVarList.append(pastValueInfo)
-                    #print("GetDataFromCurrentWindow. valueName=" + valueName + ", daysoffset=" + str(daysoffset))
-                except:
-                    continue
-            # End - if ("-" in valueName)
-        # End - for valueIndex, valueName in enumerate(inputValueNameList):
-
-
         # Make a vector big enough to hold all possible labs.
         # We will likely not need all of this space, but there is enough
         # room for the most extreme case.
         inputTensor = torch.zeros(maxNumCompleteLabSets, 1, numValsInEachInputVector, requires_grad=True)
         resultTensor = torch.zeros(maxNumCompleteLabSets, 1, 1, requires_grad=True)
         self.inputVectorIsComplete = False
-        #print("GetDataFromCurrentWindow. inputTensor.size=" + str(inputTensor.size()))
-        #print("GetDataFromCurrentWindow. self.numDataEntriesInCurrentWindow=" + str(self.numDataEntriesInCurrentWindow))
-        #print("GetDataFromCurrentWindow. maxNumCompleteLabSets=" + str(maxNumCompleteLabSets))
-        #print("GetDataFromCurrentWindow. numValsInEachInputVector=" + str(numValsInEachInputVector))
-        #print("GetDataFromCurrentWindow. inputTensor.size=" + str(inputTensor.size()))
 
         # This loop will iterate over each step in the timeline.
         timeLineIndex = firstTimelineID
         numReturnedDataSets = 0
         lastHourReturned = -1
+        inputValueTimelineIndexes = [-1] * numValsInEachInputVector
+        inputValueDayNums = [-1] * numValsInEachInputVector
         while (timeLineIndex <= lastTimelineID):
             timelineEntry = self.CompiledTimeline[timeLineIndex]
             currentDayNum = timelineEntry['TimeDays']
@@ -2123,8 +2626,7 @@ class TDFFileReader(Dataset):
             #print("GetDataFromCurrentWindow. timelineEntry=" + str(timelineEntry))
             #print("GetDataFromCurrentWindow. latestValues=" + str(latestValues))
 
-            # Skip in minimal intervals.
-            # We may keep high frequency data, like labs, along with low frequency data
+            # We may keep high frequency data, like vitals, along with low frequency data
             # like Cr. If a value is missing, we always use the most recent past value, which
             # can make low frequency data like Cr still return a series like high frequency data.
             # We want to avoid that, so skip values that happen more frequently than we want.
@@ -2140,107 +2642,39 @@ class TDFFileReader(Dataset):
                 #print("GetDataFromCurrentWindow. Overwrite. minIntervalInHours=" + str(minIntervalInHours))
                 fOverwriteLatestLabs = True
 
-            # Select only labs we are looking for.
-            # So, even if there are lots of labs, this only return labs that are relevant.
-            numFoundValues = 0
-            result = -1
-            foundAllValues = True
-            # For each requested input value, place the normalized value into the tensor.
+            # Find the labs we are looking for.
+            # There are often lots of labs, but this only return labs that are relevant.
+            foundAllInputs = True
             for valueIndex, valueName in enumerate(inputValueNameList):
-                # Parse the lab name. A lab name alone, like Creatinine, is drawn from the
-                # current timepoint. However, a lab name may also specify some past date,
-                # like the Creatinine from 3 days ago.
-                fGetLabFromCurrentTime = True
-                daysoffset = 0
-                if ("-" in valueName):
-                    try:
-                        namePartList = valueName.split('-')
-                        valueName = namePartList[0]              
-                        daysoffset = int(namePartList[1])
-                        fGetLabFromCurrentTime = False
-                        #print("GetDataFromCurrentWindow. valueName=" + valueName + ", daysoffset=" + str(daysoffset))
-                    except:
-                        pass
-
-
+                # Get the lab value itself.
                 #print("GetDataFromCurrentWindow. Look for valueName=" + valueName)
-                #print("GetDataFromCurrentWindow. Look for valueIndex=" + str(valueIndex))
+                foundIt, result = self.GetNamedValueFromTimeline(valueName, inputValueOffsets[valueIndex],
+                                                                timeLineIndex, timelineEntry, currentDayNum)
+                if (not foundIt):
+                    foundAllInputs = False
+                    break
+
                 # Get information about the lab.
                 try:
                    labInfo = g_LabValueInfo[valueName]
                 except:
                     print("Error! GetDataFromCurrentWindow found undefined lab name: " + valueName)
-                    foundAllValues = False
-                    timeLineIndex += 1
-                    continue
+                    foundAllInputs = False
+                    break
                 labMinVal = float(labInfo['minVal'])
                 labMaxVal = float(labInfo['maxVal'])
-
-
-                # Get the lab value itself.
-                try:
-                    if (fGetLabFromCurrentTime):
-                        latestValues = timelineEntry['data']
-                        result = latestValues[valueName]
-                    else:
-                        # <><><>xxxxxxxxxxx
-                        # <> BUGBUG FIXME This is pretty slow, almost n**2. 
-                        targetDayNum = currentDayNum - daysoffset
-                        #print("GetDataFromCurrentWindow. targetDayNum=" + str(targetDayNum) + ", currentDayNum=" + str(currentDayNum))
-                        # We may search to before the current window. That is ok.
-                        # The point of a past lab value is to get a trend, or baseline, and
-                        # that should not be clipped to a single hospital admission.
-                        pastTimeLineIndex = timeLineIndex
-                        fFoundPastValue = False
-                        while (pastTimeLineIndex >= 0):
-                            pastTimelineEntry = self.CompiledTimeline[pastTimeLineIndex]
-                            pastDayNum = pastTimelineEntry['TimeDays']
-                            #print("GetDataFromCurrentWindow. pastDayNum=" + str(pastDayNum))
-                            if (pastDayNum <= targetDayNum):
-                                # Don't do anything if we are too far back. If I want a lab from
-                                # 30 days before now, don't confuse this with a lab 6 years ago.
-                                if ((currentDayNum - pastDayNum) >= MAX_PREVIOUS_LAB_EXTRA_PREVIOUS):
-                                    #print("GetDataFromCurrentWindow. Too far back. pastDayNum=" + str(pastDayNum))
-                                    break
-
-                                pastLabValues = pastTimelineEntry['data']
-                                if (valueName in pastLabValues):
-                                    #print("GetDataFromCurrentWindow. valueName is in prevDay. pastDayNum=" + str(pastDayNum))
-                                    result = pastLabValues[valueName]
-                                    fFoundPastValue = True
-                                    break
-
-                            pastTimeLineIndex = pastTimeLineIndex - 1
-                        # End - while (pastTimeLineIndex >= 0):
-
-                        # End - while (pastTimeLineIndex >= 0)
-                        if (not fFoundPastValue):
-                            foundAllValues = False
-                            #print("Error! GetDataFromCurrentWindow did not find lab name: " + valueName)
-                            #print(">>latestValues=[" + str(latestValues) + "]")
-                            timeLineIndex += 1
-                            continue
-                    # End - Else if NOT (fGetLabFromCurrentTime)
-                except:
-                    foundAllValues = False
-                    #print("Error! GetDataFromCurrentWindow did not find lab name: " + valueName)
-                    #print(">>latestValues=[" + str(latestValues) + "]")
-                    timeLineIndex += 1
-                    continue
-                numFoundValues += 1
-
+                dataTypeName = labInfo['dataType']
                 #print("GetDataFromCurrentWindow. Found value valueName: " + valueName)
                 # Normalize the lab value so all values range between 0.0 and 1.0
-                normValue = self.NormalizeLabValueImpl(result, labMinVal, labMaxVal, dataTypeName)
+                normValue = TDF_NormalizeLabValue(result, labMinVal, labMaxVal, dataTypeName)
                 #print("GetDataFromCurrentWindow. valueName=" + valueName + ", result=" + str(result))
                 #print("GetDataFromCurrentWindow. valueName=" + valueName + ", normValue=" + str(normValue))
                 #print("GetDataFromCurrentWindow. valueName=" + valueName + ", fOverwriteLatestLabs=" + str(fOverwriteLatestLabs))
                 #intValue = round(100 * floatValue)
-
                 #TDF_Log("Read and normalized one value")
                 #TDF_Log("numReturnedDataSets=" + str(numReturnedDataSets) + ", valueIndex=" + str(valueIndex))
-                #TDF_Log("maxNumCompleteLabSets=" + str(maxNumCompleteLabSets) + ", numValsInEachInputVector=" + str(numValsInEachInputVector))
 
+                #TDF_Log("maxNumCompleteLabSets=" + str(maxNumCompleteLabSets) + ", numValsInEachInputVector=" + str(numValsInEachInputVector))
                 if (fOverwriteLatestLabs):
                     inputTensor[numReturnedDataSets - 1][0][valueIndex] = normValue
                 else:
@@ -2252,67 +2686,87 @@ class TDFFileReader(Dataset):
             # End - for valueIndex, valueName in enumerate(inputValueNameList):
 
 
+            # Check if there are additional requirements for a timeline entry.
+            if (foundAllInputs and (numRequireProperties > 0)):
+                #print("Check required properties. numRequireProperties=" + str(numRequireProperties))
+                #print("Check required properties. requirePropertyRelationList=" + str(requirePropertyRelationList))
+                #print("Check required properties. requirePropertyNameList=" + str(requirePropertyNameList))
+                #print("Check required properties. requirePropertyValueList=" + str(requirePropertyValueList))
+                fMeetsCriteria = self.CheckIfCurrentTimeMeetsCriteria(numRequireProperties,
+                                                requirePropertyRelationList,
+                                                requirePropertyNameList,
+                                                requirePropertyValueList,
+                                                timeLineIndex, 
+                                                timelineEntry, 
+                                                currentDayNum)
+                if (not fMeetsCriteria):
+                    foundAllInputs = False
+                #print(">foundAllInputs = " + str(foundAllInputs))
+                #sys.exit(0)
+
+            # If we did not find all of the Input values here, move on and try to them 
+            # in the next timeline position.
+            if (not foundAllInputs):
+                timeLineIndex += 1
+                continue
+                
             # Now, try to get the result for this time step.
             # Note, this is NOT normalized. That is a category ID, or exact value like INR, 
             # so we want the actual numeric value, not a normalized version.            
-            if (foundAllValues):
-                floatValue = 0
-                if (resultValueName in latestValues):
-                    floatValue = latestValues[resultValueName]
-                    if (fOverwriteLatestLabs):
-                        resultTensor[numReturnedDataSets - 1][0][0] = floatValue
-                    else:
-                        resultTensor[numReturnedDataSets][0][0] = floatValue
-                    #print("GetDataFromCurrentWindow. found resultValueName: " + str(resultValueName))
-                else:
-                    foundAllValues = False
+            foundIt, result = self.GetNamedValueFromTimeline(resultName, resultValueOffset,
+                                                             timeLineIndex, timelineEntry, currentDayNum)
 
             # If we found all values, then assemble the next vector of results.
-            if ((foundAllValues) and (not fOverwriteLatestLabs)):
-                #TDF_Log("Advance numReturnedDataSets")
-                #print("GetDataFromCurrentWindow. foundAllValues=1. Count this as complete")
-                numReturnedDataSets += 1
-                if (numReturnedDataSets >= maxNumCompleteLabSets):
-                    break
-                lastHourReturned = (currentDayNum * 24) + currentHour
-                # End - if (foundAllValues):
+            if (foundIt):
+                #print("GetDataFromCurrentWindow. found resultValueName: " + str(resultValueName))
+                if (fOverwriteLatestLabs):
+                    resultTensor[numReturnedDataSets - 1][0][0] = result
+                else:
+                    resultTensor[numReturnedDataSets][0][0] = result
+                    #TDF_Log("Advance numReturnedDataSets")
+                    #print("GetDataFromCurrentWindow. foundAllInputs=1. Count this as complete")
+                    numReturnedDataSets += 1
+                    if (numReturnedDataSets >= maxNumCompleteLabSets):
+                        break
+                    lastHourReturned = (currentDayNum * 24) + currentHour
+                # End - if (foundAllInputs):
 
             timeLineIndex += 1
         # End - while (timeLineIndex <= lastTimelineID)
 
+        if (numReturnedDataSets <= 0):
+            return numReturnedDataSets, None, None
+
         #print("GetDataFromCurrentWindow. numReturnedDataSets=" + str(numReturnedDataSets))
         if (numReturnedDataSets > maxNumCompleteLabSets):
             TDF_Log("ERROR!. numReturnedDataSets != numCompleteLabSets")
-            #print("GetDataFromCurrentWindow. numReturnedDataSets=" + str(numReturnedDataSets))
-            #print("GetDataFromCurrentWindow. maxNumCompleteLabSets=" + str(maxNumCompleteLabSets))
             numReturnedDataSets = maxNumCompleteLabSets
-        #print("GetDataFromCurrentWindow. numValsInEachInputVector=" + str(numValsInEachInputVector))
-        #print("GetDataFromCurrentWindow. inputTensor.size=" + str(inputTensor.size()))
-        #print("GetDataFromCurrentWindow. inputTensor=" + str(inputTensor))
-
+        
+        # Discard any previous compute graph.
+        # tensor.detach() creates a tensor that shares storage with tensor that does not require grad. It detaches
+        inputTensor = inputTensor.detach()
+        resultTensor = resultTensor.detach()
 
         # The client expects that the returned tensors will be the exact size.
-        # <>BUG. Fix This! FIXTHIS I do a c-style copy. There must be a better python-esque way
-        # that is much faster. However reshape() and resize() seem to require 2 tensors with the
-        # same total number of elements, just different shapes. view() also does not seem to work.
-        # Spend more time on looking into this when things are otherwise working.
-        newInputTensor = torch.zeros(numReturnedDataSets, 1, numValsInEachInputVector, requires_grad=True)
-        #newResultTensor = torch.empty(numReturnedDataSets, dtype=torch.long)
-        newResultTensor = torch.zeros(numReturnedDataSets, 1, 1, dtype=torch.long)
+        # We have to return a full tensor, without any unused rows.
+        # This will reallocate the working tensors.
+        newInputTensor = inputTensor[:numReturnedDataSets,:1,:numValsInEachInputVector]
+        newResultTensor = resultTensor[:numReturnedDataSets,:1,:1]
+        
+        #print("GetDataFromCurrentWindow. numValsInEachInputVector=" + str(numValsInEachInputVector))
+        #print("newInputTensor.dim() = " + str(newInputTensor.dim()))
+        #print("newInputTensor.size() = " + str(newInputTensor.size()))
+        #print("newResultTensor.dim() = " + str(newResultTensor.dim()))
+        #print("newResultTensor.size() = " + str(newResultTensor.size()))
+        #for dataSetNum in range(numReturnedDataSets):
+        #    for inputNum in range(numValsInEachInputVector):
+        #        if (newInputTensor[dataSetNum][0][inputNum] != inputTensor[dataSetNum][0][inputNum]):
+        #            print("ERROR!")
+        #    # End - for inputNum in range(numValsInEachInputVector):
+        #    if (newResultTensor[dataSetNum][0][0] != resultTensor[dataSetNum][0][0]):
+        #        print("ERROR!")
+        ## End - for dataSetNum in range(numReturnedDataSets)
 
-        for dataSetNum in range(numReturnedDataSets):
-            for inputNum in range(numValsInEachInputVector):
-                newInputTensor[dataSetNum][0][inputNum] = inputTensor[dataSetNum][0][inputNum]
-            # End - for inputNum in range(numValsInEachInputVector):
-            newResultTensor[dataSetNum][0][0] = int(resultTensor[dataSetNum][0][0])
-        # End - for dataSetNum in range(numReturnedDataSets)
-
-        # <> BUG. FIXTHIS. This is a SECOND copy on top of the copy immediately above. Ugh. 
-        # The tensors were created from an in-use operation. That breaks gradients.
-        # However, this is a second copy, so the new copy has not had elements accessed, and so
-        # it will allow gradients
-        newInputTensor = newInputTensor.detach()
-        newResultTensor = newResultTensor.detach()
 
         # If we did not return with success in the above loop, then tell the caller
         # there is no more data left.
@@ -2325,50 +2779,357 @@ class TDFFileReader(Dataset):
 
 
 
-    ################################################################################
+
+
+    #####################################################
     #
-    # [TDFFileReader::NormalizeLabValueImpl]
+    # [TDFFileReader::GetListOfValsForCurrentPatient]
     #
-    # dataTypeName has values:
-    #   "NormFraction" 
-    #   "NormInt0-100"
-    ################################################################################
-    def NormalizeLabValueImpl(self, labValue, minVal, maxVal, dataTypeName):
-        #print("NormalizeLabValueImpl. labValue=" + str(labValue))
-        #print("NormalizeLabValueImpl. minVal=" + str(minVal))
-        #print("NormalizeLabValueImpl. maxVal=" + str(maxVal))
+    # This returns two lists of values.
+    #####################################################
+    def GetListOfValsForCurrentPatient(self, 
+                                    valueName1, 
+                                    valueList1,
+                                    valueName2,
+                                    valueList2,
+                                    numRequireProperties,
+                                    requirePropertyRelationList,
+                                    requirePropertyNameList,
+                                    requirePropertyValueList):
+        #print("====================================GetListOfValsForCurrentPatient, start")
+        #TDF_Log("Enter GetListOfValsForCurrentPatient")
+        #TDF_LogMemoryInfo()
+        foundPrevValues = False
+        prevValue1 = -1
+        prevValue2 = -1
 
-        # Clip the value to within the min and max.
-        # Some patients can have *really* odd values, like a patient who refuses 
-        # transfusion can have a Hgb around 3.0.
-        if (labValue < float(minVal)):
-            labValue = float(minVal)
-        if (labValue > float(maxVal)):
-            labValue = float(maxVal)
+        # Get information about the requested variables. This splits
+        # complicated name values like "eGFR[-30]" into a name and an 
+        # offset, like "eGFR" and "-30"
+        labInfo1, nameStem1, valueOffset1 = self.ParseSingleVariable(valueName1)
+        if (None == labInfo1):
+            print("!!Error!!")
+            return None, None
+        labInfo2, nameStem2, valueOffset2 = self.ParseSingleVariable(valueName2)
+        if (None == labInfo2):
+            print("!!Error!!")
+            return None, None
 
-        # Normalize the value to a number between 0..1 for where this
-        # value lands in the range of possible values.
-        range = float(maxVal) - float(minVal)
-        #print("NormalizeLabValueImpl. range=" + str(range))
+        # Find where we will look for the data
+        firstTimelineID = self.startTimeLineIDInCurrentWindow
+        lastTimelineID = self.lastTimeLineIDInCurrentWindow
 
-        offset = float(labValue) - float(minVal)
-        #print("NormalizeLabValueImpl. offset=" + str(offset))
+        # This loop will iterate over each step in the timeline.
+        timeLineIndex = firstTimelineID
+        while (timeLineIndex <= lastTimelineID):
+            timelineEntry = self.CompiledTimeline[timeLineIndex]
+            currentDayNum = timelineEntry['TimeDays']
+            currentHour = timelineEntry['TimeHours']
+            #print("GetListOfValsForCurrentPatient. timeLineIndex=" + str(timeLineIndex))
+            #print("GetListOfValsForCurrentPatient. timelineEntry=" + str(timelineEntry))
+            #print("GetListOfValsForCurrentPatient. latestValues=" + str(latestValues))
 
-        if (range > 0):
-            normalFloatValue = float(offset /  range)
-        else:
-            normalFloatValue = 0.0
+            # Find the labs we are looking for.
+            foundNewValue, value1 = self.GetNamedValueFromTimeline(nameStem1, valueOffset1,
+                                                             timeLineIndex, timelineEntry, currentDayNum)
+            if (foundNewValue):
+                foundNewValue, value2 = self.GetNamedValueFromTimeline(nameStem2, valueOffset2,
+                                                               timeLineIndex, timelineEntry, currentDayNum)
 
-        if (dataTypeName == "NormInt0-100"):
-            resultVal = int(round(normalFloatValue))
-        elif (dataTypeName == "NormFraction"):
-            resultVal = round(normalFloatValue, 2)
-        else:
-            resultVal = round(normalFloatValue, 2)
+            # If we found both values, make sure this is not a repeat.
+            # We may carry past values forward every time there is new data, like
+            # new vital signs. As a result, a slower changing lab may be repeated many 
+            # times until a true new value appears.
+            # We use the fact that both values are identical to indicate this is a repeat.
+            # This may rarely miss a true case of identical values at different times, but
+            # that is rare.
+            if ((foundNewValue) and (foundPrevValues) and (prevValue1 == value1) and (prevValue2 == value2)):
+                foundNewValue = False
+            if (foundNewValue):
+                foundPrevValues = True
+                prevValue1 = value1
+                prevValue2 = value2
 
-        #print("NormalizeLabValueImpl. normalValue=" + str(normalValue))
-        return(resultVal)
-    # End - NormalizeLabValueImpl
+            # If we found both values, then normalize them
+            if (foundNewValue):
+                labMinVal = float(labInfo1['minVal'])
+                labMaxVal = float(labInfo1['maxVal'])
+                #dataTypeName = labInfo1['dataType']
+                if (value1 < float(labMinVal)):
+                    value1 = float(labMinVal)
+                if (value1 > float(labMaxVal)):
+                    value1 = float(labMaxVal)
+                valueList1.append(value1)
+
+                labMinVal = float(labInfo2['minVal'])
+                labMaxVal = float(labInfo2['maxVal'])
+                #dataTypeName = labInfo2['dataType']
+                if (value2 < float(labMinVal)):
+                    value2 = float(labMinVal)
+                if (value2 > float(labMaxVal)):
+                    value2 = float(labMaxVal)
+                valueList2.append(value2)
+
+            timeLineIndex += 1
+        # End - while (timeLineIndex <= lastTimelineID)
+
+        return valueList1, valueList2
+    # End - GetListOfValsForCurrentPatient()
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetStatsForList]
+    #
+    # This returns two lists of values.
+    #####################################################
+    def GetStatsForList(self, valueList):
+        # Compute the mean, which is the average of the values.
+        # Make sure to treat these as floats to avoid truncation or rounding errors.
+        avgValue = 0
+        refAvgValue = 0
+        listLen = len(valueList)
+        if (listLen > 0):
+            avgValue = float(sum(valueList)) / listLen
+            refAvgValue = statistics.mean(valueList)  # 20.11111111111111
+        #print("Derived avgValue=" + str(avgValue))
+        #print("Reference avgValue=" + str(refAvgValue))
+
+        # Next, compute the variance.
+        # This is a measure of how far spread out the numbers are.
+        # Intuitively, this is the average distance from members of the set and the mean.
+        # This uses the "Sample Variance" where avgValue is the sample mean, not the
+        # mean of some superset "population" from which the sample is drawn.
+        # As a result, we divide by listLen-1, but if we used the "population mean" then
+        # we would divide by listLen
+        variance = sum((x - avgValue) ** 2 for x in valueList) / listLen
+        refVariance = np.var(valueList)
+        #print("Derived variance=" + str(variance))
+        #print("Reference variance=" + str(refVariance))
+
+        # Standard deviation is simply the sqrt of the Variance
+        stdDev = math.sqrt(variance)
+        refStdDev = np.std(valueList)
+        #print("Derived stdDev=" + str(stdDev))
+        #print("Reference stdDev=" + str(refStdDev))
+
+        return listLen, refAvgValue, refVariance, refStdDev
+    # End - GetStatsForList
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::CalculatePearsonCovarianceForLists]
+    #
+    # This returns two lists of values.
+    #####################################################
+    def CalculatePearsonCovarianceForLists(self, valueList1, valueList2):
+        length1, meanVal1, variance1, stdDev1 = self.GetStatsForList(valueList1)
+        length2, meanVal2, variance2, stdDev2 = self.GetStatsForList(valueList2)
+
+        # Compute the covariance. 
+        # This is the tendency for the variables to have a linear relationship.
+        # ???It is the slope of the regression line.???
+        # It is computed by the average of the products of distances from each list element and the list mean.
+        #
+        # If a list is sorted in increasing order, then the difference between list elements and the list mean will
+        # start with a negative number (the smallest value, so farthest below the mean) and end with a positive number
+        # (the largest value, so farthest greater than the mean). 
+        # Each value in the list will have a difference to the mean that lays somewhere in the middle.
+        # The two lists are covariant if small values in one list correspond to small values in the other list, and
+        # large values in one list correspond to large values in the other list. In other words, the two corresponding
+        # values will have distances with the same sign, either both positive or both negative. In either case, their
+        # product is a positive value.
+        # If the two lists are not covariant, then a number above average in one list will be associated with a
+        # number below average in the other list. when they are very different, then their differences to the respective 
+        # means will have different polarity, one is positice and one is negative. The product is a negative number.
+        # The sum of all of these will be a mix of positive and negative products.
+        covariance = 0
+        for i in range(0, length1):
+            covariance += ((valueList1[i] - meanVal1) * (valueList2[i] - meanVal2))
+        # This is the sample covariance, so we should use length-1 to compute the mean.
+        # However, the Python library seems to use the population variance, so uses length to compute the mean
+        covariance = covariance / length1 # (length1 - 1)
+        refCovariance = np.cov(valueList1, valueList2)[0][1]
+        #print("Derived covariance=" + str(covariance))
+        #print("Reference covariance=" + str(refCovariance))
+
+        # The absolute value of the covariance can be any number, from -infinity to +infinity.
+        # Its absolute value does not tell you anything about how well the lists are correlated.
+        # So, normalize the covariance by the variability of the data. This essentially normalizes
+        # the covariance by some measure of the range of values (largest - smallest). Now, why don't
+        # we normalize the the products of the two ranges like (largest - smallest of set 1) * (largest - smallest of set2)
+        # Not sure.
+        # Pearson assumes a Gaussian distribution of the data, because it uses the mean value of each list
+        # in its calculation.
+        # It has values between -1 (negative correlation) and 1 (positive correlation). 0 means no correlation.
+        pearsonCoeff = covariance / (stdDev1 * stdDev2)
+
+        corrMatrix = np.corrcoef(valueList1, valueList2)
+        refPearsonCoeff = corrMatrix[0, 1]
+
+        ##refPearsonList = pearsonr(valueList1, valueList2)
+        ##refPearsonCoeff2 = refPearsonList[0]
+        ##refPValue = refPearsonList[1]
+
+        #print("Derived pearsonCoeff=" + str(pearsonCoeff))
+        #print("Reference pearsonCoeff=" + str(refPearsonCoeff))
+        ##print("Reference pearsonCoeff2=" + str(refPearsonCoeff2))
+
+        return refPearsonCoeff
+    # End - CalculatePearsonCovarianceForLists
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::CalculateSpearmanCovarianceForLists]
+    #
+    # Spearman correlation is just the Pearson correlation coefficient 
+    # between the rank variables
+    #####################################################
+    def CalculateSpearmanCovarianceForLists(self, valueList1, valueList2):
+        listLength = len(valueList1)
+
+        # Make a list of value indexes. 
+        # These are the positions of a value in the original value-list.
+        indexList1 = list(range(listLength))
+        indexList2 = list(range(listLength))
+
+        # Sort the indexes based on the actual values. 
+        # This creates a list of value indexes, sorted in the order of the values themselves.
+        # So, the first index references to the smallest value, and so on.
+        # Because indexList is ordered, the position of an entry in indexList is also its rank.
+        # So, the index stored at indexList[x] stores an index into valueList, but x (the index in indexList) is the rank.
+        # This uses sort, so it takes O(N*logN) 
+        indexList1.sort(key=lambda x: valueList1[x])
+        indexList2.sort(key=lambda x: valueList2[x])
+
+        # Now, arrange the ranks into the same order of the items in the original value list.
+        # This means valueRanksList[N] stored the rank of the value stored at valueList1[N]
+        # The index into indexList is the rank of the value stored in valueList1
+        valueRanksList1 = [0] * listLength
+        for indexListIndex, valueListIndex in enumerate(indexList1):
+            valueRanksList1[valueListIndex] = indexListIndex
+
+        valueRanksList2 = [0] * listLength
+        for indexListIndex, valueListIndex in enumerate(indexList2):
+            valueRanksList2[valueListIndex] = indexListIndex
+
+        #print("=================")
+        #print("valueList1=" + str(valueList1))
+        #print("=================")
+        #print("indexList=" + str(indexList))
+        #print("=================")
+        #print("valueRanksList=" + str(valueRanksList))
+        
+        mySpearman = self.CalculatePearsonCovarianceForLists(valueRanksList1, valueRanksList2)
+
+        #scipy.stats.spearmanr will take care of computing the ranks for you, you simply have to give it the data in the correct order:
+        refSpearmanCoeff, pValue = spearmanr(valueList1, valueList2)
+
+        #print("=================")
+        #print("mySpearman=" + str(mySpearman))
+        #print("refSpearmanCoeff=" + str(refSpearmanCoeff))
+
+        return refSpearmanCoeff
+    # End - CalculateSpearmanCovarianceForLists
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetCovariance]
+    #
+    #####################################################
+    def GetCovariance(self, varName1, varName2):
+        # Iterate over every patient
+        numpatients = 0
+        list1 = []
+        list2 = []
+        fFoundPatient = self.GotoFirstPatient()
+        while (fFoundPatient):
+            list1, list2 = self.GetListOfValsForCurrentPatient(varName1, list1, varName2, list2, 0, None, None, None)
+    
+            numpatients += 1
+            if ((False) and (numpatients >= 10)):
+                break
+            fFoundPatient = self.GotoNextPatient()
+        # End - while (patientNode):
+
+        pearson = 0
+        spearman = 0
+
+        pearson = self.CalculatePearsonCovarianceForLists(list1, list2)
+        #spearman = self.CalculateSpearmanCovarianceForLists(list1, list2)
+
+        return pearson, spearman
+    # End - GetCovariance
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::FindCovariantInputs]
+    #
+    #####################################################
+    def FindCovariantInputs(self, resultVarName, inputNameListStr):
+        print("\nCovariance with " + resultVarName + "\n===============================")
+
+        inputNameList = inputNameListStr.split(',')  
+        for valueIndex, inputName in enumerate(inputNameList):
+            pearson, spearman = self.GetCovariance(resultVarName, inputName)
+            pearson = round(pearson, 4)
+            spearman = round(spearman, 4)
+            print(inputName + ": " + str(pearson))
+    # End - FindCovariantInputs
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::TestGetRawTimelineData]
+    #
+    #####################################################
+    def TestGetRawTimelineData(self, timeLineIndex):
+        if ((timeLineIndex < 0) or (timeLineIndex >= len(self.CompiledTimeline))):
+            return False, 0, 0, {}
+
+        timelineEntry = self.CompiledTimeline[timeLineIndex]
+        currentDayNum = timelineEntry['TimeDays']
+        currentHour = timelineEntry['TimeHours']
+        currentMin = timelineEntry['TimeMin']
+        
+        #timeStamp = TDF_MakeTimeStamp(currentDayNum, currentHour, currentMin)
+        dataDict = timelineEntry['data']
+
+        timeStampAsInt = 0
+        timeStampAsInt = timeStampAsInt + (currentDayNum * 24 * 60 * 60)
+        # Add hours in seconds
+        timeStampAsInt = timeStampAsInt + (currentHour * 60 * 60)
+        # Add minutes in seconds
+        timeStampAsInt = timeStampAsInt + (currentMin * 60)
+
+        return True, timeStampAsInt, currentDayNum, dataDict
+    # End - TestGetRawTimelineData
 
 
 
@@ -2383,6 +3144,9 @@ class TDFFileReader(Dataset):
     def CompilePatientTimelineImpl(self):
         #print("CompilePatientTimelineImpl, start")
 
+        if (self.m_DebugMode):
+            print("CompilePatientTimelineImpl, start Debugging")
+
         self.CompiledTimeline = []
         # At any given time, self.LatestLabsFromCurrentOrEarlierTimes has the most recent
         # value for each lab.
@@ -2394,7 +3158,7 @@ class TDFFileReader(Dataset):
         self.latestTimeLineEntry = None
 
         # Initialize the latest labs with a few special values that don't change.
-        self.LatestLabsFromCurrentOrEarlierTimes['isMale'] = int(self.CurrentIsMale)
+        self.LatestLabsFromCurrentOrEarlierTimes['IsMale'] = int(self.CurrentIsMale)
         self.LatestLabsFromCurrentOrEarlierTimes['WtKg'] = int(self.CurrentWtInKg)
         if (self.CurrentRaceStr == "C"):
             self.LatestLabsFromCurrentOrEarlierTimes['IsCaucasian'] = 1
@@ -2411,11 +3175,20 @@ class TDFFileReader(Dataset):
 
         # This is the list of recent values and the current baseline
         self.numPastDaysForBaselineCr = 2
-        self.recentPastCrDays = deque([])
-        self.recentPastCrValues = deque([])
         self.BaselineGFR = -1
         self.BaselineCr = -1
         self.BaselineMELD = -1
+        self.DateOfLatestCKD5 = -1
+
+        # Initialize the daily med list for the forward pass.            
+        self.DailyMeds = dict()
+        self.NewMedsForCurrentDay = dict()
+        self.NewMedHoursForCurrentDay = dict()
+        self.DailyMeds["WarfarinDose"] = 0.0
+        self.DailyMeds["MTXDose"] = 0.0
+        self.DailyMeds["TacroDoseAM"] = 0.0
+        self.DailyMeds["TacroDosePM"] = 0.0
+        self.DailyMeds["VoriDose"] = 0.0
 
 
         ######################################
@@ -2428,41 +3201,65 @@ class TDFFileReader(Dataset):
         currentTimelinePointID = -1
         self.CurrentAdmitDay = -1
         while (currentNode):
-            nodeType = XMLTools_GetElementName(currentNode)
-            nodeType = nodeType.lower()
+            nodeType = XMLTools_GetElementName(currentNode).lower()
             #print("Forward Pass. NodeType: " + nodeType)
 
             # Get the timestamp for this XML node.
-            if (nodeType == "oc"):
-                labDateDays = 0
-                labDateHours = 0
-                labDateMins = 0
-            # Events
+            labDateDays = 0
+            labDateHours = 0
+            labDateMins = 0
+            # Data and Events
             if ((nodeType == "e") or (nodeType == "d")):
                 timeStampStr = currentNode.getAttribute("T")
                 labDateDays, labDateHours, labDateMins = TDF_ParseTimeStamp(timeStampStr)
-                dataClass = currentNode.getAttribute("C").lower()
 
+                if (self.m_DebugMode):
+                    if ((labDateDays >= 18506) and (labDateDays <= 18574)):
+                        #print("FORWARD PASS. labDateDays=" + str(labDateDays) + ", timeStampStr=" + str(timeStampStr))
+                        pass
+
+                dataClass = currentNode.getAttribute("C").lower()
+            else:
+                currentNode = XMLTools_GetAnyPeerNode(currentNode)
+                continue
 
             # Find where we store the data from this XML node in the runtime timeline.
             # There may be separate XML nodes for labs, vitals and events that all map to the same
-            # point in time. Collapse all data from the same time to a single data point.
+            # point in time. Collapse all lab and vitals data from the same time to a single data point.
             reuseLatestData = False
             if ((self.latestTimeLineEntryTimeDays == labDateDays)
                     and (self.latestTimeLineEntryTimeHours == labDateHours)
                     and (self.latestTimeLineEntryTimeMins == labDateMins)):
                 reuseLatestData = True
-            # Outcomes are sloppy, always reuse the most recent data point.
-            elif (nodeType == "oc"):
+            # Outcome dates are sloppy. However, do not overuse too much
+            # because that allows a later diagnosis to overwrite the date of a much
+            # earlier data point.
+            elif ((nodeType == "oc")
+                    and (self.latestTimeLineEntryTimeDays == labDateDays)
+                    and (self.latestTimeLineEntryTimeHours >= labDateHours)):
                 reuseLatestData = True
-            # Diagnoses are sloppy, always reuse the most recent data point.
-            elif ((nodeType == "d") and (dataClass == "d")):
+            # Diagnosis dates are sloppy. However, do not overuse too much
+            # because that allows a later diagnosis to overwrite the date of a much
+            # earlier data point.
+            elif ((nodeType == "d") and (dataClass == "d")
+                    and (self.latestTimeLineEntryTimeDays == labDateDays)
+                    and (self.latestTimeLineEntryTimeHours >= labDateHours)):
                 reuseLatestData = True
             # Events reuse the most recent data point if it is in the same day and hour
             elif ((nodeType == "e")
                     and (self.latestTimeLineEntryTimeDays == labDateDays)
-                    and (self.latestTimeLineEntryTimeHours == labDateHours)):
+                    and (self.latestTimeLineEntryTimeHours >= labDateHours)):
                 reuseLatestData = True
+
+
+
+            if (self.m_DebugMode):
+                if ((labDateDays >= 18506) and (labDateDays <= 18574)):
+                    print("FORWARD PASS. labDateDays=" + str(labDateDays) + ", timeStampStr=" + str(timeStampStr))
+                    print("    reuseLatestData=" + str(reuseLatestData) + ", currentTimelinePointID=" + str(currentTimelinePointID))
+                    print("    self.latestTimeLineEntryTimeDays=" + str(self.latestTimeLineEntryTimeDays))
+                    print("    nodeType=" + str(nodeType))
+
 
 
             # Get the actual list of data values for this time.
@@ -2491,6 +3288,38 @@ class TDFFileReader(Dataset):
                 timelineEntry['data'] = privateCopy
                 self.LatestLabsFromCurrentOrEarlierTimes = privateCopy
 
+                # At the start of each day, we update the list of medications.
+                if ((self.latestTimeLineEntryTimeDays < 0) or (labDateDays != self.latestTimeLineEntryTimeDays)):
+                    # Overwrite the daily meds with any changes from the previous day.
+                    for index, (medName, medDose) in enumerate(self.NewMedsForCurrentDay.items()):
+                        self.DailyMeds[medName] = medDose
+
+                    # Copy the daily med lists to each day's meds.
+                    # Drug events happen when a drug is ordered, not each time it is given.
+                    # As a result, we keep a list of daily meds, and apply it to each day.
+                    # We update the list of daily meds any time a new order.
+                    #
+                    # BUG BUGBUG FIXME
+                    # Note, this does NOT record when a med is stopped, so once it starts
+                    # and is added to the daily list, then it continues.
+                    #
+                    # BUG BUGBUG FIXME
+                    # If a drug is ordered for day N, it will be added to the daily med list
+                    # at the end of the day, and only show up on the next day. This may be close
+                    # to what happens on the wards, so actually may be correct.
+                    for index, (medName, medDose) in enumerate(self.DailyMeds.items()):
+                        self.LatestLabsFromCurrentOrEarlierTimes[medName] = medDose
+
+                    # Reset the list of new med additions for the new day we are about to start.
+                    self.NewMedsForCurrentDay = dict()
+                    self.NewMedHoursForCurrentDay = dict()
+                    # Some counters are added over the course of a day. Initialize them.
+                    self.NewMedsForCurrentDay["VancDose"] = 0.0
+                    self.NewMedsForCurrentDay["TobraDose"] = 0.0
+                    self.NewMedsForCurrentDay["VoriDose"] = 0.0
+                    self.NewMedsForCurrentDay["CycDose"] = 0.0
+                # End - Update med lists at the start of each new day.
+
                 self.latestTimeLineEntryTimeDays = labDateDays
                 self.latestTimeLineEntryTimeHours = labDateHours
                 self.latestTimeLineEntryTimeMins = labDateMins
@@ -2512,6 +3341,16 @@ class TDFFileReader(Dataset):
             elif (nodeType == "d"):
                 self.ProcessDataNodeForwardImpl(currentNode, labDateDays, labDateHours, labDateMins)
 
+            # Count the days since the last dialysis or ESRD event.
+            daysSinceCKD5 = -1
+            if (("CKDStage" in self.LatestLabsFromCurrentOrEarlierTimes) 
+                    and (self.LatestLabsFromCurrentOrEarlierTimes["CKDStage"] >= 5)):
+                self.DateOfLatestCKD5 = labDateDays
+            if (self.DateOfLatestCKD5 > 0):
+                daysSinceCKD5 = labDateDays - self.DateOfLatestCKD5
+            self.LatestLabsFromCurrentOrEarlierTimes["DaysSinceDialysis"] = daysSinceCKD5
+            
+
             currentNode = XMLTools_GetAnyPeerNode(currentNode)
         # End - while (currentNode):
 
@@ -2532,6 +3371,12 @@ class TDFFileReader(Dataset):
             nodeType = nodeType.lower()
             #print("nodeType: " + str(nodeType))
 
+            # Skip anything that is not a data or event node.
+            # We don't do anything with nodes like outcomes.
+            if ((nodeType != "e") and (nodeType != "d")):
+                currentNode = XMLTools_GetAnyPrevPeerNode(currentNode)
+                continue
+
             timeStampStr = currentNode.getAttribute("T")
             # Some nodes, like outcomes, do not have timestamps.
             if (timeStampStr != ""):
@@ -2541,10 +3386,19 @@ class TDFFileReader(Dataset):
                 labDateHours = 0
                 labDateMins = 0
 
-            timelinePointID = currentNode.getAttribute("xID")
-            #print("Reverse timelinePointID = " + str(timelinePointID))
-            #print("Reverse (before update) HR = " + str(self.CompiledTimeline[int(timelinePointID)]['data']['HR']))
-            timelineEntry = self.CompiledTimeline[int(timelinePointID)]
+            timelinePointIDStr = currentNode.getAttribute("xID")
+            #print("Reverse timelinePointIDStr = " + str(timelinePointIDStr))
+            #print("Reverse (before update) HR = " + str(self.CompiledTimeline[int(timelinePointIDStr)]['data']['HR']))
+            timelineIndex = int(timelinePointIDStr)
+            timelineEntry = self.CompiledTimeline[timelineIndex]
+
+            if (self.m_DebugMode):
+                self.m_DebugLevel = 0
+                if ((labDateDays >= 18506) and (labDateDays <= 18574)):
+                    print("REVERSE PASS. labDateDays=" + str(labDateDays) + ", timeStampStr=" + str(timeStampStr))
+                    print("      timelinePointIDStr=" + str(timelinePointIDStr) + ", timelineIndex=" + str(timelineIndex))
+                    print("      nodeType: " + str(nodeType) + ", labDateDay = " + str(labDateDays))
+                    self.m_DebugLevel = 1
 
             # Get a reference to the data collected up to this point in FORWARD order.
             # This was compiled in the previous loop, which did the forward pass.
@@ -2560,6 +3414,10 @@ class TDFFileReader(Dataset):
 
             currentNode = XMLTools_GetAnyPrevPeerNode(currentNode)
         # End - while (currentNode):
+
+
+
+        self.LastTimeLineIndex = len(self.CompiledTimeline) - 1
     # End - CompilePatientTimelineImpl(self)
 
 
@@ -2575,14 +3433,17 @@ class TDFFileReader(Dataset):
     ################################################################################
     def ProcessEventNodeForwardImpl(self, eventNode, eventDateDays, eventDateHours, eventDateMins):
         #print("ProcessEventNodeForwardImpl")
+
         eventClass = eventNode.getAttribute("C")
         eventValue = eventNode.getAttribute("V")
         #print("ProcessEventNodeForwardImpl. Class=" + eventClass)
         #print("ProcessEventNodeForwardImpl. Value=" + eventValue)
 
+        ############################################
         if (eventClass == "Admit"):
             self.LatestLabsFromCurrentOrEarlierTimes['InHospital'] = 1
             self.CurrentAdmitDay = eventDateDays
+        ############################################
         elif (eventClass == "Discharge"):
             self.LatestLabsFromCurrentOrEarlierTimes['InHospital'] = 0
             eventNode.setAttribute("AdmitDate", str(self.CurrentAdmitDay))
@@ -2592,29 +3453,128 @@ class TDFFileReader(Dataset):
             self.LatestLabsFromCurrentOrEarlierTimes['DiedIn12Mos'] = 0
             self.LatestLabsFromCurrentOrEarlierTimes['ReadmitIn30Days'] = 0
             self.LatestLabsFromCurrentOrEarlierTimes['DiagMyeloma'] = 0
+        ############################################
         elif (eventClass == "Transfer"):
             if (eventValue.startswith("ICU")):
                 self.LatestLabsFromCurrentOrEarlierTimes['InICU'] = 1
             else:
                 self.LatestLabsFromCurrentOrEarlierTimes['InICU'] = 0
+        ############################################
         elif (eventClass == "RapidResponse"):
             self.LatestLabsFromCurrentOrEarlierTimes['MostRecentRapidResponseDate'] = eventDateDays
+        ############################################
         elif (eventClass == "Proc"):
             if (eventValue == "proc/Dialysis"):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentDialysisDate'] = eventDateDays
+                self.DateOfLatestCKD5 = eventDateDays
             elif (eventValue == "proc/CardiacCath"):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentCardiacCathDate'] = eventDateDays
             elif (eventValue == "proc/Intubation"):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentIntubationDate'] = eventDateDays
             elif (eventValue == "proc/PEG"):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentPEGDate'] = eventDateDays
+        ############################################
         elif (eventClass == "Surg"):
             if (eventValue == "Major/Cardiac/CABG"):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentCABGDate'] = eventDateDays
             elif (eventValue.startswith("Major")):
                 self.LatestLabsFromCurrentOrEarlierTimes['MostRecentMajorSurgeryDate'] = eventDateDays
+        ############################################
         elif (eventClass == "Med"):
-            pass
+            doseStr = eventNode.getAttribute("D")
+            eventValue = eventValue.lower()
+            ###########
+            if ((eventValue == "warfarin") or (eventValue == "coumadin") or (eventValue == "coum")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    #print("WarfarinDose=" + doseStr)
+                    self.NewMedsForCurrentDay["WarfarinDose"] = float(doseStr)
+                    # This takes effect on the next day. Coumadin is usually given in the evenings, and INR
+                    # is not checked until the next morning.
+                    # self.LatestLabsFromCurrentOrEarlierTimes["WarfarinDose"] = float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "mtx") or (eventValue == "methotrexate")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    #print("MTXDose=" + doseStr)
+                    self.NewMedsForCurrentDay["MTXDose"] = float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "tac") or (eventValue == "tacrolimus")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    # Record the separate AM and PM doses
+                    if ((eventDateHours >= 0) and (eventDateHours <= 12)):
+                        #print("Tacrolimus. AM. Day=" + str(eventDateDays) + ", hour=" + str(eventDateHours) + ", min=" + str(eventDateMins) + ", dose="+ doseStr)
+                        self.NewMedsForCurrentDay["TacroDoseAM"] = float(doseStr)
+                    else:
+                        #print("Tacrolimus. PM. Day=" + str(eventDateDays) + ", dose="+ doseStr)
+                        self.NewMedsForCurrentDay["TacroDosePM"] = float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "vanc") or (eventValue == "vancomycin")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    # Make sure this is a new dose.
+                    # BUGBUG FIXME - The TDF writer seems to accidentally add the same drug several times.
+                    if ((not ("VancDose" in self.NewMedHoursForCurrentDay)) or (self.NewMedHoursForCurrentDay["VancDose"] < eventDateHours)):
+                        self.NewMedHoursForCurrentDay["VancDose"] = eventDateHours
+                        #print("VancDose=" + doseStr)
+                        # Add this to the daily total. Vanc may be given daily, or Q12h or Q8h. We use the 
+                        # total daily dose for each day.
+                        self.NewMedsForCurrentDay["VancDose"] += float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "vori") or (eventValue == "voriconazole")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    # Make sure this is a new dose.
+                    # BUGBUG FIXME - The TDF writer seems to accidentally add the same drug several times.
+                    if ((not ("VoriDose" in self.NewMedHoursForCurrentDay)) or (self.NewMedHoursForCurrentDay["VoriDose"] < eventDateHours)):
+                        self.NewMedHoursForCurrentDay["VoriDose"] = eventDateHours
+                        #print("VoriDose=" + doseStr)
+                        # Add this to the daily total.
+                        self.NewMedsForCurrentDay["VoriDose"] += float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "tob") or (eventValue == "tobramycin")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    # Make sure this is a new dose.
+                    # BUGBUG FIXME - The TDF writer seems to accidentally add the same drug several times.
+                    if ((not ("TobraDose" in self.NewMedHoursForCurrentDay)) or (self.NewMedHoursForCurrentDay["TobraDose"] < eventDateHours)):
+                        self.NewMedHoursForCurrentDay["TobraDose"] = eventDateHours
+                        #print("VoriDose=" + doseStr)
+                        # Add this to the daily total.
+                        self.NewMedsForCurrentDay["TobraDose"] += float(doseStr)
+                # End - if (doseStr != ""):
+            ###########
+            elif ((eventValue == "csa") or (eventValue == "cyclosporine")):
+                doseStr = doseStr.lstrip()
+                # Be careful. Some orders, are "Pharmacist to dose" and do not have a dose.
+                if (doseStr != ""):
+                    #print("CycDose=" + doseStr)
+                    # Add this to the daily total.
+                    if ((not ("CycDose" in self.NewMedHoursForCurrentDay)) or (self.NewMedHoursForCurrentDay["CycDose"] < eventDateHours)):
+                        self.NewMedHoursForCurrentDay["CycDose"] = eventDateHours
+                        #print("VoriDose=" + doseStr)
+                        # Add this to the daily total.
+                        self.NewMedsForCurrentDay["CycDose"] += float(doseStr)
+
+                    # Record the separate AM and PM doses
+                    if ((eventDateHours >= 0) and (eventDateHours <= 12)):
+                        self.NewMedsForCurrentDay["CycDoseAM"] = float(doseStr)
+                    else:
+                        self.NewMedsForCurrentDay["CycDosePM"] = float(doseStr)
+                # End - if (doseStr != ""):
+        ############################################
         elif (eventClass == "Clinic"):
             pass
     # End - ProcessEventNodeForwardImpl
@@ -2637,7 +3597,8 @@ class TDFFileReader(Dataset):
         dataClass = dataNode.getAttribute("C")
         labTextStr = str(XMLTools_GetTextContents(dataNode))
 
-        # Diagnosis
+        ###################################
+        # Diagnosis Node
         # Record the first time we have a diagnosis. That is why we do this on a
         # forward, not reverse, pass.
         if (dataClass == "D"): 
@@ -2646,9 +3607,10 @@ class TDFFileReader(Dataset):
                 attrName = "Diagnose_" + diagnosisVal
                 if (not (attrName in self.TimesOfFutureEvents)):
                     self.TimesOfFutureEvents[attrName] = labDateDays
+        ###################################
         # Labs and Vitals
         # Copy all labs and vitals into the accumulator
-        if ((dataClass == "L") or (dataClass == "V")):
+        elif ((dataClass == "L") or (dataClass == "V")):
             assignmentList = labTextStr.split(',')
             for assignment in assignmentList:
                 #print("ProcessDataNodeForwardImpl. assignment=" + assignment)        
@@ -2656,21 +3618,21 @@ class TDFFileReader(Dataset):
                 if (len(assignmentParts) < 2):
                     continue
                 labName = assignmentParts[0]
-                labValueStr = assignmentParts[1]
+                labvalueStr = assignmentParts[1]
                 labValueFloat = -1.0
                 foundValidLab = False
                 #print("ProcessDataNodeForwardImpl. labName=" + labName)        
-                #print("ProcessDataNodeForwardImpl. labValueStr=" + labValueStr)        
-                if ((labName != "") and (labValueStr != "")):
+                #print("ProcessDataNodeForwardImpl. labvalueStr=" + labvalueStr)        
+                if ((labName != "") and (labvalueStr != "")):
                     foundValidLab = True
                     try:
-                        labValueFloat = float(labValueStr)
+                        labValueFloat = float(labvalueStr)
                     except:
                         # Replace invalid characters.
-                        labValueStr = labValueStr.replace('>', '') 
-                        labValueStr = labValueStr.replace('<', '') 
+                        labvalueStr = labvalueStr.replace('>', '') 
+                        labvalueStr = labvalueStr.replace('<', '') 
                         try:
-                            labValueFloat = float(labValueStr)
+                            labValueFloat = float(labvalueStr)
                         except:
                             foundValidLab = False
                 # End - if ((labName != "") and (labValue != "")):
@@ -2703,6 +3665,7 @@ class TDFFileReader(Dataset):
         # End - if ((dataClass == "L") or (dataClass == "V")):
 
 
+        ###################################
         # Compute all derived values
         #######################
         valueName = "AgeInYrs"
@@ -2991,6 +3954,9 @@ class TDFFileReader(Dataset):
         #print("ProcessEventNodeInReverseImpl")
         #print("eventClass=" + str(eventClass) + ", eventValue=" + str(eventValue))
 
+        if (self.m_DebugLevel >= 1):
+            print("ProcessEventNodeInReverseImpl. eventClass=" + str(eventClass) + ", eventValue=" + str(eventValue))
+
         #####################
         if (eventClass == "Admit"):
             self.TimesOfFutureEvents['NextAdmissionDate'] = eventDateDays
@@ -3026,6 +3992,7 @@ class TDFFileReader(Dataset):
         elif (eventClass == "Proc"):
             if (eventValue == "proc/Dialysis"):
                 self.TimesOfFutureEvents['NextDialysisDate'] = eventDateDays
+                self.DateOfLatestCKD5 = eventDateDays
             elif (eventValue == "proc/Intubation"):
                 self.TimesOfFutureEvents['NextIntubationDate'] = eventDateDays
         #####################
@@ -3155,6 +4122,11 @@ class TDFFileReader(Dataset):
         futureDate = -1
         if ("NextCKD5Date" in self.TimesOfFutureEvents):
             futureDate = self.TimesOfFutureEvents["NextCKD5Date"]
+
+        if (self.m_DebugLevel >= 1):
+            print("ProcessDataNodeInReverseImpl. labDateDays = " + str(labDateDays) + ", futureDate = " + str(futureDate))
+            print("ProcessDataNodeInReverseImpl. deltaTime = " + str((futureDate - labDateDays)))
+            print("ProcessDataNodeInReverseImpl. FutureCategory = " + str(self.ComputeOutcomeCategory(labDateDays, futureDate)))
         self.LatestLabsFromCurrentOrEarlierTimes["Future_CKD5"] = self.ComputeOutcomeCategory(labDateDays, futureDate)
 
 
@@ -3305,7 +4277,7 @@ class TDFFileReader(Dataset):
 
         # 0 = EVENT is happening now or has previously happened
         daysUntilOutcome = outcomeDate - currentDate
-        if (daysUntilOutcome < 0):
+        if (daysUntilOutcome <= 0):
             return(TDF_FUTURE_EVENT_NOW_OR_PAST)
 
         # 1 = EVENT will happen in 1 day
@@ -3407,12 +4379,16 @@ class TDFFileReader(Dataset):
 # A public procedure.
 ################################################################################
 def TDF_GetVariableType(valueName):
+    if (VARIABLE_START_OFFSET_MARKER in valueName):
+        valueName = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+        #print("Clipped name. valueName = " + valueName)
+
     # Get information about the lab.
     try:
         labInfo = g_LabValueInfo[valueName]
     except:
         print("Error! TDF_GetVariableType found undefined lab name: " + valueName)
-        return("")
+        return(TDF_DATA_TYPE_UNKNOWN)
 
     dataType = labInfo['dataType']
     return(dataType)
@@ -3420,27 +4396,198 @@ def TDF_GetVariableType(valueName):
 
 
 
+
 ################################################################################
 # A public procedure.
 ################################################################################
-def TDF_GetNumValuesForCategoryVariable(valueName):
-    #print("TDF_GetNumValuesForCategoryVariable. valueName = " + valueName)
+def TDF_GetMinMaxValuesForVariable(valueName):
+    #print("TDF_GetMinMaxValuesForVariable. valueName = " + valueName)
+    if (VARIABLE_START_OFFSET_MARKER in valueName):
+        valueName = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+        #print("Clipped name. valueName = " + valueName)
 
     # Get information about the lab.
     try:
         labInfo = g_LabValueInfo[valueName]
     except:
-        print("Error! TDF_GetNumValuesForCategoryVariable found undefined lab name: " + valueName)
-        return(0)
+        print("Error! TDF_GetMinMaxValuesForVariable found undefined lab name: " + valueName)
+        return -1,-1
 
+    labMinVal = float(labInfo['minVal'])
+    labMaxVal = float(labInfo['maxVal'])
+    return labMinVal, labMaxVal
+# End - TDF_GetMinMaxValuesForVariable
+
+
+
+
+################################################################################
+# A public procedure.
+################################################################################
+def TDF_GetNumClassesForVariable(valueName):
+    #print("TDF_GetNumClassesForVariable. valueName = " + valueName)
+    if (VARIABLE_START_OFFSET_MARKER in valueName):
+        valueName = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+        #print("Clipped name. valueName = " + valueName)
+
+    # Get information about the lab.
     try:
-        numVals = int(labInfo['numValues'])
+        labInfo = g_LabValueInfo[valueName]
     except:
-        print("Error! TDF_GetNumValuesForCategoryVariable found wrong data type: " + str(dataType))
-        return(0)
+        print("Error! TDF_GetNumClassesForVariable found undefined lab name: " + valueName)
+        return(1)
+
+    if (labInfo['dataType'] == TDF_DATA_TYPE_BOOL):
+        numVals = 2
+    elif (labInfo['dataType'] == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+        return(TDF_NUM_CATEGORIES_IN_FUTURE_VAL)
+    else:
+        numVals = 1
 
     return(numVals)
-# End - TDF_GetNumValuesForCategoryVariable
+# End - TDF_GetNumClassesForVariable
+
+
+
+
+################################################################################
+#
+# [TDF_NormalizeLabValue]
+#
+# dataTypeName has values:
+#   "NormFraction" 
+#   "NormInt0-100"
+################################################################################
+def TDF_NormalizeLabValue(labValue, minVal, maxVal, dataTypeName):
+    #print("TDF_NormalizeLabValue. labValue=" + str(labValue))
+    #print("TDF_NormalizeLabValue. minVal=" + str(minVal))
+    #print("TDF_NormalizeLabValue. maxVal=" + str(maxVal))
+
+    # Clip the value to within the min and max.
+    # Some patients can have *really* odd values, like a patient who refuses 
+    # transfusion can have a Hgb around 3.0.
+    if (labValue < float(minVal)):
+        labValue = float(minVal)
+    if (labValue > float(maxVal)):
+        labValue = float(maxVal)
+
+    # Normalize the value to a number between 0..1 for where this
+    # value lands in the range of possible values.
+    range = float(maxVal) - float(minVal)
+    #print("NormalizeLabValueImpl. range=" + str(range))
+
+    offset = float(labValue) - float(minVal)
+    #print("NormalizeLabValueImpl. offset=" + str(offset))
+
+    if (range > 0):
+        normalFloatValue = float(offset /  range)
+    else:
+        normalFloatValue = 0.0
+
+    if (dataTypeName == "NormInt0-100"):
+        resultVal = int(round(normalFloatValue))
+    elif (dataTypeName == "NormFraction"):
+        resultVal = round(normalFloatValue, 2)
+    else:
+        resultVal = round(normalFloatValue, 2)
+
+    #print("TDF_NormalizeLabValue. normalValue=" + str(normalValue))
+    return(resultVal)
+# End - TDF_NormalizeLabValue
+
+
+
+
+
+################################################################################
+#
+# [TDF_ParseUserRequestDataString]
+#
+# A public procedure.
+# This is used to parse the data passed in a HTTP request to a web server into
+# a tensor of input values.
+################################################################################
+def TDF_ParseUserRequestDataString(inputNameListStr, userProvidedInputvalueStr):
+    # Parse the input names into a list.
+    # Leave the offsets on the names, as those offsets willremain on the name for both
+    # the variables and the values.
+    inputValueNameList = inputNameListStr.split(',')
+    numValsInEachInputVector = len(inputValueNameList)      
+
+    # Make a vector big enough to hold the labs.
+    inputTensor = torch.zeros(1, 1, numValsInEachInputVector, requires_grad=True)
+
+    # Parse the named data values into a list.
+    # Leave the offsets on the names, as those offsets willremain on the name for both
+    # the variables and the values.
+    userProvidedInputValueList = userProvidedInputvalueStr.split(',')
+    numUserProvidedInputValues = len(userProvidedInputValueList)      
+    userProvidedInputNames = [" "] * numUserProvidedInputValues
+    userProvidedInputData = [0] * numUserProvidedInputValues
+    for valueIndex, valueStr in enumerate(userProvidedInputValueList):
+        partsList = valueStr.split('=')
+        userProvidedInputNames[valueIndex] = partsList[0]
+        userProvidedInputData[valueIndex] = float(partsList[1])
+        #print("userProvidedInputNames[n]=" + str(userProvidedInputNames[valueIndex]))
+        #print("userProvidedInputData[n]=" + str(userProvidedInputData[valueIndex]))
+
+
+    # Find the labs we are looking for.
+    # This will leave offsets on the variables, like Cr[-3]. 
+    # The userdata will also include these offsets, so we exactly match the entire string.
+    foundAllInputs = True
+    for nameIndex, nameStr in enumerate(inputValueNameList):
+        foundCurrentValue = False
+        for valueNameIndex, valueNameStr in enumerate(userProvidedInputNames):
+            #print("Look for nameStr=" + str(nameStr))
+            if (nameStr == valueNameStr):
+                valueNameStem = valueNameStr
+                if (VARIABLE_START_OFFSET_MARKER in valueNameStem):
+                    valueNameStem = valueNameStem.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+    
+                # Get information about the lab.
+                try:
+                   labInfo = g_LabValueInfo[valueNameStem]
+                except:
+                    break
+
+                labMinVal = float(labInfo['minVal'])
+                labMaxVal = float(labInfo['maxVal'])
+                dataTypeName = labInfo['dataType']
+                #print("Found nameStr=" + str(nameStr))
+                #print("Found nameStr labInfo=" + str(labInfo))
+
+                # Normalize the lab value so all values range between 0.0 and 1.0
+                normValue = TDF_NormalizeLabValue(userProvidedInputData[valueNameIndex], 
+                                                    labMinVal, labMaxVal, dataTypeName)
+
+                inputTensor[0][0][nameIndex] = normValue
+                foundCurrentValue = True
+                break
+            # End - if (nameStr == valueNameStr):
+        # End - for valueNameIndex, valueNameStr in enumerate(userProvidedInputNames):        
+
+        if (not foundCurrentValue):
+            TDF_Log("TDF_ParseUserRequestDataString. Failed to find " + nameStr)
+            foundAllInputs = False
+            break
+    # End - for nameIndex, nameStr in enumerate(inputValueNameList):
+
+    if (not foundAllInputs):
+        return False, None
+
+    # tensor.detach() creates a tensor that shares storage with tensor that does not require grad. It detaches
+    inputTensor = inputTensor.detach()
+
+    # The client expects that the returned tensors will be the exact size.
+    # We have to return a full tensor, without any unused rows.
+    # This will reallocate the working tensors.
+    newInputTensor = inputTensor[:1,:1,:numValsInEachInputVector]
+
+    return True, newInputTensor
+# End - TDF_ParseUserRequestDataString
+
+
 
 
 
@@ -3448,6 +4595,10 @@ def TDF_GetNumValuesForCategoryVariable(valueName):
 # A public procedure.
 ################################################################################
 def TDF_GetFutureTimeHorizonForVariable(valueName):
+    if (VARIABLE_START_OFFSET_MARKER in valueName):
+        valueName = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)[0]
+        #print("Clipped name. valueName = " + valueName)
+
     # Get information about the lab.
     try:
         labInfo = g_LabValueInfo[valueName]
@@ -3458,11 +4609,6 @@ def TDF_GetFutureTimeHorizonForVariable(valueName):
     numFutureDaysNeeded = int(labInfo['numFutureDaysNeeded'])
     return(numFutureDaysNeeded)
 # End - TDF_GetFutureTimeHorizonForVariable
-
-
-
-
-
 
 
 
@@ -3519,3 +4665,5 @@ def TDF_CreateNewFileWriter(fileH):
     #           For each event window in the patient
     #               For each data entry in the current window
     #
+
+
