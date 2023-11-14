@@ -1,6 +1,6 @@
 #####################################################################################
 # 
-# Copyright (c) 2020 Dawson Dean
+# Copyright (c) 2020-2023 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -24,16 +24,8 @@
 #
 # Some utility procedures for testing and debugging.
 #####################################################################################
-
-import os
-import sys
-import shutil
-import string
 import time
 from datetime import datetime
-from time import gmtime, strftime
-import platform
-import numpy
 
 Test_AllLogLines = ""
 Test_NumTestWarnings = 0
@@ -102,16 +94,6 @@ def Test_StartAllTests(testType):
 #
 #####################################################
 def Test_EndAllTests():
-    global Test_AllLogLines
-    global Test_NumTestWarnings
-    global Test_NumTestErrors
-    global Test_NumModulesTested
-    global Test_NumTests
-    global Test_SubTestNestingLevel
-    global Test_NumHeartbeats
-    global Test_HeartbeatsBeforeProgressIndicator
-    global Test_AllTestsStartTimeInSeconds
-
     durationInSeconds = time.time() - Test_AllTestsStartTimeInSeconds
     durationInSeconds = round(durationInSeconds, 1)
 
@@ -256,10 +238,10 @@ def Test_StartSubTest(testName):
 
     # Print the message.
     padding = ""
-    for indent in range(Test_SubTestNestingLevel):
+    for _ in range(Test_SubTestNestingLevel):
         padding = padding + "   "
     Test_Log(padding + "==> Testing: " + testName)
-# Test_StartSubTest.
+# Test_StartSubTest
 
 
 
@@ -276,10 +258,8 @@ def Test_EndSubTest():
     global Test_SubTestNestingLevel
 
     Test_NumHeartbeats = 0
-    Test_SubTestNestingLevel = Test_SubTestNestingLevel - 1
-    if (Test_SubTestNestingLevel < 0):
-        Test_SubTestNestingLevel = 0
-# Test_EndSubTest.
+    Test_SubTestNestingLevel = max(Test_SubTestNestingLevel - 1, 0)
+# Test_EndSubTest
 
 
 
@@ -292,7 +272,6 @@ def Test_EndSubTest():
 #####################################################
 def Test_ShowProgress():
     global Test_NumHeartbeats
-    global Test_SubTestNestingLevel
 
     Test_NumHeartbeats += 1
     if (Test_NumHeartbeats >= Test_HeartbeatsBeforeProgressIndicator):
