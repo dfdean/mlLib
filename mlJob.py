@@ -1,6 +1,6 @@
 ####################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -62,6 +62,12 @@
 #       </TrainingResults>
 #
 #       <TestingResults>
+#           <Hist0>
+#           </Hist0>
+#
+#           <Hist1>
+#           </Hist1>
+#
 #       </TestingResults>
 #
 #   </Results>
@@ -97,12 +103,21 @@
 # ===========================
 #   NetworkType
 #       SimpleNet
-#       multilevelNet
+#       DeepNet
 #       LSTM
 #
+#   LogisticOutput
 #   OutputThreshold
 #       A number between 0 and 1 which determines whether the prediction is true.
 #       This is only used for Logistic networks
+#
+#   InputSequence
+#   InputSequenceMinSize
+#   InputSequenceMaxSize
+#       This defaults to 1 for a function that takes a single value and outputs a result.
+#    
+#   MaxSequenceDurationInDays
+#       How far apart a sequence duration can be spread
 #
 #   StateSize
 #       An integer, 0-N, which is the size of a RNN state vector.
@@ -227,7 +242,7 @@
 # The runtime state for the Job training/testing sequence. It is describes the execution
 # of a job, not the job results.
 # ===========================
-#   OriginalFilePathname
+#   JobFilePathName
 #
 #   StartRequestTimeStr
 #   StopRequestTimeStr
@@ -236,8 +251,6 @@
 #   TotalTrainingLossInCurrentEpoch
 #
 #   BufferedLogLines
-#
-#   DebugEvent
 #
 #   OS
 #   CPU
@@ -262,12 +275,6 @@
 #   <Bias>
 #   </Bias>
 #
-#
-# Member Variables for TestList
-# ===========================
-#   A list of test elements, each of thich can contain different inputs and outputs.
-#   This is very unstructured, and its use depends on the individual tests.
-#
 #####################################################################################
 import os
 import sys
@@ -276,6 +283,9 @@ import re
 from datetime import datetime
 import platform
 import random
+
+import hashlib  # For Hashing an array
+import json
 
 from xml.dom.minidom import getDOMImplementation
 
@@ -296,8 +306,6 @@ import dataShow as dataShow
 NEWLINE_STR = "\n"
 ML_JOB_NUM_NUMERIC_VALUE_BUCKETS            = 20
 
-ML_JOB_DEFAULT_MAX_SKIPPED_NUMERIC_VALUE_BUCKETS    = 16
-ML_JOB_DEFAULT_MAX_SKIPPED_EVENT_CLASS_BUCKETS      = 10
 
 ########################################
 # XML Elements
@@ -313,6 +321,8 @@ JOB_CONTROL_ELEMENT_NAME    = "JobControl"
 JOBCTL_STATUS_ELEMENT_NAME  = "Status"
 JOBCTL_ERROR_CODE_ELEMENT_NAME  = "ErrCode"
 JOBCTL_RESULT_MSG_ELEMENT_NAME  = "ErrMsg"
+JOBCTL_RUN_OPTIONS_ELEMENT_NAME  = "RunOptions"
+JOBCTL_RUN_OPTION_SEPARATOR_STR = ","
 
 # <Data>
 DATA_ELEMENT_NAME = "Data"
@@ -322,77 +332,74 @@ TRAINING_ELEMENT_NAME = "Training"
 TRAINING_OPTION_BATCHSIZE = "BatchSize"
 TRAINING_OPTION_LEARNING_RATE = "LearningRate"
 TRAINING_OPTION_NUM_EPOCHS = "NumEpochs"
-TRAINING_OPTIONS_ELEMENT_NAME = "TrainingOptions"
 TRAINING_MAX_NUM_SKIPPED_RESULT_CLASSES = "MaxSkippedResultClasses"
 
+# <Training><ValueInfo>
+TRAINING_PRIORITY_VALUE_INFO = "ValueInfo"
+TRAINING_PRIORITY_VALUE_NAME = "ValueName"
+TRAINING_PRIORITY_SRC_FILE = "SrcFile"
+TRAINING_PRIORITY_CREATION_DATE = "DateCollected"
+TRAINING_PRIORITY_MIN_VALUE = "MinValue"
+TRAINING_PRIORITY_MAX_VALUE = "MaxValue"
+TRAINING_PRIORITY_MEAN_VALUE = "MeanValue"
+TRAINING_PRIORITY_NUM_CLASSES = "NumPriorities"
+TRAINING_PRIORITY_CLASS_PRIORITIES = "ClassPriorities"
+
 # <Runtime>
-RUNTIME_ELEMENT_NAME        = "Runtime"
+RUNTIME_ELEMENT_NAME = "Runtime"
 RUNTIME_LOG_NODE_ELEMENT_NAME = "Log"
+RUNTIME_HASH_DICT_ELEMENT_NAME = "HashDict"
+RUNTIME_FILE_PATHNAME_ELEMENT_NAME = "JobFilePathname"
+RUNTIME_START_ELEMENT_NAME = "StartRequestTimeStr"
+RUNTIME_STOP_ELEMENT_NAME = "StopRequestTimeStr"
+RUNTIME_CURRENT_EPOCH_ELEMENT_NAME = "CurrentEpochNum"
+RUNTIME_NONCE_ELEMENT_NAME = "Nonce"
 
 # <Results>
 RESULTS_ELEMENT_NAME = "Results"
 RESULTS_PREFLIGHT_ELEMENT_NAME = "PreflightResults"
 RESULTS_TRAINING_ELEMENT_NAME = "TrainingResults"
-RESULTS_NUM_ELEMENT_NAME = "TestingResults"
 RESULTS_TESTING_ELEMENT_NAME = "TestingResults"
-RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME = "LogisticOutputs"
 
-# These are used for preflight, training and testing
-RESULTS_NUM_ITEMS_ELEMENT_NAME = "NumSequences"
+# <Results><PreflightResults>
+RESULTS_PREFLIGHT_NUM_ITEMS_ELEMENT_NAME = "NumSequences"
+RESULTS_PREFLIGHT_NUM_ITEMS_PER_CLASS_ELEMENT_NAME = "NumItemsPerClass"
+RESULTS_PREFLIGHT_INPUT_MINS_ELEMENT_NAME = "InputMins"
+RESULTS_PREFLIGHT_INPUT_MAXS_ELEMENT_NAME = "InputMaxs"
+RESULTS_PREFLIGHT_INPUT_RANGES_ELEMENT_NAME = "InputRanges"
+RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST = "ResultClassWeightList"
+RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT = "ResultClassWeight"
+RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES = "NumResultClasses"
+RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID = "ResultClassID"
+RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE = "ClassWeight"
 
-# These are just for preflight
-RESULTS_NUM_ITEMS_PER_CLASS_ELEMENT_NAME = "NumItemsPerClass"
-RESULTS_INPUT_MINS_ELEMENT_NAME = "InputMins"
-RESULTS_INPUT_MAXS_ELEMENT_NAME = "InputMaxs"
-RESULTS_INPUT_TOTALS_ELEMENT_NAME = "InputTotals"
-RESULTS_INPUT_MEANS_ELEMENT_NAME = "InputMeans"
-RESULTS_INPUT_DIVERGENCE_FROM_MEAN_TOTALS_ELEMENT_NAME = "InputDivergenceTotals"
-RESULTS_INPUT_STD_DEV_ELEMENT_NAME = "InputStdDev"
-RESULTS_INPUT_SUMS_FOR_EACH_CLASS_ELEMENT_NAME = "InputSumsForEachResultClass"
-RESULTS_PREFLIGHT_CENTROID_TYPE = "CentroidType"
-RESULTS_PREFLIGHT_NUM_CENTROIDS = "NumCentroids"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_VALUES = "GlobalCentroidInputValues"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_TOTALS = "GlobalCentroidValTotals"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_NUM_SATELLITES = "GlobalCentroidNumNodes"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_MAX_DISTANCE = "GlobalCentroidMaxDistance"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_MEANS = "GlobalCentroidInputValMeans"
-RESULTS_PREFLIGHT_GLOBAL_CENTROID_RESULT_CLASSES = "GlobalCentroidResultClasses"
-RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS = "ResultClassCentroidInputValues"
-RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_TOTALS = "ResultClassCentroidInputValTotals"
-RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS_NUM_SATS = "ResultClassCentroidNumNodes"
-RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_MAX_DISTANCE = "ResultClassCentroidMaxDistance"
-RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_INPUT_MEANS = "ResultClassCentroidInputValMeans"
-RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_LIST = "ResultClassWeightList"
-RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT = "ResultClassWeight"
-RESULTS_PREFLIGHT_NUM_RESULT_CLASSES = "NumResultClasses"
-RESULTS_PREFLIGHT_RESULT_CLASS_ID = "ResultClassID"
-RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_VALUE = "ClassWeight"
-
-# These are just for Training
-RESULTS_TRAINING_TOTAL_DEV_ELEMENT_NAME = "TotalDev"
-RESULTS_TRAINING_STANDARD_DEV_ELEMENT_NAME = "StdDev"
-
-# These are used only for testing
-RESULTS_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME = "NumPredictionsPerClass"
-RESULTS_NUM_CORRECT_PER_CLASS_ELEMENT_NAME  = "NumCorrectPerClass"
+# <Results><TestingResults>
+RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME = "AllTests"
+NUM_TEST_RESULT_GROUPS   = 10
+RESULTS_TEST_NUM_ITEMS_ELEMENT_NAME = "NumSequences"
+RESULTS_TEST_NUM_ITEMS_PER_CLASS_ELEMENT_NAME = "NumItemsPerClass"
+RESULTS_TEST_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME = "NumPredictionsPerClass"
+RESULTS_TEST_NUM_CORRECT_PER_CLASS_ELEMENT_NAME  = "NumCorrectPerClass"
+RESULTS_TEST_NUM_CORRECT_PER_CLASS_ELEMENT_NAME  = "NumCorrectPerClass"
 RESULTS_ROCAUC_ELEMENT_NAME = "ROCAUC"
 RESULTS_AUPRC_ELEMENT_NAME = "AUPRC"
 RESULTS_F1Score_ELEMENT_NAME = "F1Score"
+RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME = "LogisticOutputs"
 
 # <Network>
 NETWORK_ELEMENT_NAME = "Network"
 NETWORK_TYPE_ELEMENT_NAME = "NetworkType"
-NETWORK_STATE_SIZE_ELEMENT_NAME = "StateSize"
+NETWORK_STATE_SIZE_ELEMENT_NAME = "RecurrentStateSize"
 NETWORK_OUTPUT_THRESHOLD_ELEMENT_NAME = "MapOutputToBoolThreshold"
+NETWORK_SEQUENCE_ELEMENT_NAME = "InputSequence"
+NETWORK_SEQUENCE_SIZE_ELEMENT_NAME = "InputSequenceSize"
+NETWORK_SEQUENCE_MAX_DURATION_DAYS_ELEMENT_NAME = "MaxSequenceDurationInDays"
 
 NETWORK_LOGISTIC_ELEMENT_NAME       = "LogisticOutput"
 
 # <SavedModelState>
 SAVED_MODEL_STATE_ELEMENT_NAME      = "SavedModelState"
 RUNTIME_OPTIMIZER_STATE             = "PyTorchOptimizerState"
-SAVED_STATE_TYPE_ELEMENT_NAME       = "SavedStateType"
-SAVED_STATE_FILE_PATH_ELEMENT_NAME  = "SavedStateFilePath"
-SAVED_STATE_XGBoost_ELEMENT_NAME    = "XGBoostSavedState"
 
 # <NeuralNetMatrixList>
 NETWORK_MATRIX_LIST_NAME = "NeuralNetMatrixList"
@@ -404,16 +411,12 @@ VALUE_FILTER_LIST_SEPARATOR = "{AND}"
 MLJOB_MATRIX_FORMAT_ATTRIBUTE_NAME = "format"
 MLJOB_MATRIX_FORMAT_SIMPLE = "simple"
 
-MLJOB_CENTROID_TYPE_FIXED = "Fixed"
-
 # These are the values found in the <JobControl/Status> element
 MLJOB_STATUS_IDLE         = "IDLE"
 MLJOB_STATUS_PREFLIGHT    = "PREFLIGHT"
 MLJOB_STATUS_TRAINING     = "TRAIN"
 MLJOB_STATUS_TESTING      = "TEST"
 MLJOB_STATUS_DONE         = "DONE"
-
-TEST_LIST_XML_NODE_NAME     = "TestList"
 
 # These are specific to Job files. They must be translated into other error codes
 # in higher level modules. That's not pretty, but it makes Job a standalone module.
@@ -431,12 +434,6 @@ ROW_SEPARATOR_CHAR          = "/"
 
 MLJOB_NAMEVAL_SEPARATOR_CHAR    = ";"
 
-ADDITIONAL_MULTIPLIER_FOR_UNDERREPRESENTED_CLASSES = 2.0
-# We still want some of the information from pre-test probability. 
-# We just don't want so much of the common cases that they completely
-# overwhelms the rare cases.
-CLASS_WEIGHTS_LEVEL_FOR_REINTRODUCING_PRETEST_PROBABILITY = 0.25
-
 DEBUG_EVENT_TIMELINE_EPOCH          = "Epoch"
 DEBUG_EVENT_TIMELINE_CHUNK          = "Chunk"
 DEBUG_EVENT_TIMELINE_LOSS           = "Loss"
@@ -444,10 +441,377 @@ DEBUG_EVENT_OUTPUT_AVG              = "Out.avg"
 DEBUG_EVENT_NONLINEAR_OUTPUT_AVG    = "NLOut.avg"
 
 
+
 ################################################################################
+#
+# This class records all results for tests in a single group.
+# We may want to track the results of different preconditions, like subgroup analysis.
 ################################################################################
-def GetCurrentTimeInMS():
-    return round(time.time() * 1000)
+class MLJobTestResults():
+    #####################################################
+    # Constructor - This method is part of any class
+    #####################################################
+    def __init__(self):
+        self.ResultXMLNode = None
+
+        # These are inherited from the parent, not stored with each results bucket
+        self.ResultValueType = tdf.TDF_DATA_TYPE_INT
+        self.ResultMinValue = 0
+        self.ResultMaxValue = 0
+        self.NumResultClasses = 0
+        self.BucketSize = 0
+        self.IsLogisticNetwork = False
+        self.OutputThreshold = 0
+
+        self.NumSamplesTested = 0
+        self.TestResults = {}
+
+        self.TestNumItemsPerClass = []
+        self.TestNumPredictionsPerClass = []
+        self.TestNumCorrectPerClass = []
+
+        self.LogisticResultsTrueValueList = []
+        self.LogisticResultsPredictedProbabilityList = []
+        self.ROCAUC = -1
+        self.AUPRC = -1
+        self.F1Score = -1
+    # End -  __init__
+
+
+    #####################################################
+    #
+    # [MLJobResults::InitResultsXML]
+    #
+    #####################################################
+    def InitResultsXML(self, testResultXMLNode, xmlNodeName):
+        self.ResultXMLNode = dxml.XMLTools_GetOrCreateChildNode(testResultXMLNode, xmlNodeName)
+    # End of InitResultsXML
+
+
+
+    #####################################################
+    #
+    # [MLJobResults::SetGlobalResultInfo]
+    #
+    #####################################################
+    def SetGlobalResultInfo(self, resultValueType, numResultClasses, resultMinValue, resultMaxValue, bucketSize, isLogisticNetwork, outputThreshold):
+        self.ResultValueType = resultValueType
+        self.NumResultClasses = numResultClasses
+
+        self.ResultMinValue = resultMinValue
+        self.ResultMaxValue = resultMaxValue
+        self.BucketSize = bucketSize
+
+        self.IsLogisticNetwork = isLogisticNetwork
+        self.OutputThreshold = outputThreshold
+    # End of SetGlobalResultInfo
+
+
+
+    #####################################################
+    #
+    # [MLJobTestResults::StartTesting
+    # 
+    #####################################################
+    def StartTesting(self):
+        self.NumSamplesTested = 0
+        self.TestResults = {"NumCorrectPredictions": 0}
+        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
+            self.TestResults["NumPredictionsWithin2Percent"] = 0
+            self.TestResults["NumPredictionsWithin5Percent"] = 0
+            self.TestResults["NumPredictionsWithin10Percent"] = 0
+            self.TestResults["NumPredictionsWithin20Percent"] = 0
+            self.TestResults["NumPredictionsWithin50Percent"] = 0
+            self.TestResults["NumPredictionsWithin100Percent"] = 0
+        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            self.TestResults["NumPredictionsWithin1Class"] = 0
+        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
+            self.TestResults["NumPredictionsTruePositive"] = 0
+            self.TestResults["NumPredictionsTrueNegative"] = 0
+            self.TestResults["NumPredictionsFalsePositive"] = 0
+            self.TestResults["NumPredictionsFalseNegative"] = 0
+
+        self.TestNumItemsPerClass = [0] * self.NumResultClasses
+        self.TestNumPredictionsPerClass = [0] * self.NumResultClasses
+        self.TestNumCorrectPerClass = [0] * self.NumResultClasses
+    # End - StartTesting
+
+
+
+
+    #####################################################
+    #
+    # [MLJobTestResults::RecordTestingResult
+    # 
+    #####################################################
+    def RecordTestingResult(self, actualValue, predictedValue):
+        fDebug = False
+        self.NumSamplesTested += 1
+
+        #########################
+        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
+            difference = abs(float(actualValue - predictedValue))
+
+            if (difference == 0):
+                self.TestResults["NumCorrectPredictions"] += 1
+            if (difference <= (actualValue * 0.02)):
+                self.TestResults["NumPredictionsWithin2Percent"] += 1
+            elif (difference <= (actualValue * 0.05)):
+                self.TestResults["NumPredictionsWithin5Percent"] += 1
+            elif (difference <= (actualValue * 0.1)):
+                self.TestResults["NumPredictionsWithin10Percent"] += 1
+            elif (difference <= (actualValue * 0.2)):
+                self.TestResults["NumPredictionsWithin20Percent"] += 1
+            elif (difference <= (actualValue * 0.5)):
+                self.TestResults["NumPredictionsWithin50Percent"] += 1
+            elif (difference <= (actualValue * 1.0)):
+                self.TestResults["NumPredictionsWithin100Percent"] += 1
+
+            offset = max(actualValue - self.ResultMinValue, 0)
+            actualBucketNum = int(offset / self.BucketSize)
+            if (actualBucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
+                actualBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
+            self.TestNumItemsPerClass[actualBucketNum] += 1
+
+            # Check for extremes, since the prediction may be very huge or very small.
+            if (predictedValue >= self.ResultMaxValue):
+                predictedBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
+            elif (predictedValue < self.ResultMinValue):
+                predictedBucketNum = 0
+            else:
+                try:
+                    offset = max(predictedValue - self.ResultMinValue, 0)
+                    predictedBucketNum = int(offset / self.BucketSize)
+                    if (predictedBucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
+                        predictedBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
+                except Exception:
+                    predictedBucketNum = 0
+            # End - else
+            self.TestNumPredictionsPerClass[predictedBucketNum] += 1
+            if (predictedBucketNum == actualBucketNum):
+                self.TestNumCorrectPerClass[actualBucketNum] += 1
+        # End - if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT))
+
+        #########################
+        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            actualValueInt = int(actualValue)
+            predictedValueInt = int(predictedValue)
+            self.TestNumItemsPerClass[actualValueInt] += 1
+            self.TestNumPredictionsPerClass[predictedValue] += 1
+            if (actualValueInt == predictedValueInt):
+                self.TestResults["NumCorrectPredictions"] += 1
+                self.TestResults["NumPredictionsWithin1Class"] += 1
+                self.TestNumCorrectPerClass[int(actualValueInt)] += 1
+            else:  # if (actualValueInt != predictedValueInt):
+                if ((actualValueInt - 1) <= predictedValueInt <= (actualValueInt + 1)):
+                    self.TestResults["NumPredictionsWithin1Class"] += 1
+        # End - elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+
+        #########################
+        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
+            # If this is a Logistic, then convert the resulting probability into a 0 or 1
+            if (fDebug):
+                print("RecordTestingResult. Bool. actualValue=" + str(actualValue))
+                print("RecordTestingResult. Bool. predictedValue=" + str(predictedValue))
+                print("RecordTestingResult. Bool. self.IsLogisticNetwork=" + str(self.IsLogisticNetwork))
+
+            if ((self.IsLogisticNetwork) and (self.OutputThreshold > 0)):
+                predictedFloat = float(predictedValue)
+                if (fDebug):
+                    print("Process a logistic result. predictedValue=" + str(predictedValue) + ", predictedFloat=" 
+                            + str(predictedFloat))
+                self.LogisticResultsTrueValueList.append(actualValue)
+                self.LogisticResultsPredictedProbabilityList.append(predictedFloat)
+
+                # Now, convert the probability to a normal boolean result like we would have for any bool.
+                if (predictedFloat >= self.OutputThreshold):
+                    predictedValue = 1
+                else:
+                    predictedValue = 0
+            # End - if ((self.IsLogisticNetwork) and (self.OutputThreshold > 0)):
+
+            actualValueInt = int(actualValue)
+            predictedValueInt = int(predictedValue)
+            if (fDebug):
+                print("RecordTestingResult.  actualValueInt = " + str(actualValueInt) 
+                        + ", predictedValueInt = " + str(predictedValueInt))
+
+            self.TestNumItemsPerClass[actualValueInt] += 1
+            self.TestNumPredictionsPerClass[predictedValueInt] += 1
+            if (actualValueInt == predictedValueInt):
+                self.TestResults["NumCorrectPredictions"] += 1
+                if (predictedValueInt > 0):
+                    self.TestResults["NumPredictionsTruePositive"] += 1
+                else:
+                    self.TestResults["NumPredictionsTrueNegative"] += 1
+                self.TestNumCorrectPerClass[int(actualValueInt)] += 1
+            else:  # if (actualValueInt != predictedValueInt):
+                if (predictedValueInt > 0):
+                    self.TestResults["NumPredictionsFalsePositive"] += 1
+                else:
+                    self.TestResults["NumPredictionsFalseNegative"] += 1
+        # End - elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
+    # End -  RecordTestingResult
+
+
+
+    #####################################################
+    #
+    # [MLJobTestResults::StopTesting]
+    #
+    #####################################################
+    def StopTesting(self):
+        # Normally this is done when we finish testing.
+        if (self.IsLogisticNetwork):
+            # Get the Receiver Operator Curve AUC
+            self.ROCAUC = roc_auc_score(self.LogisticResultsTrueValueList, 
+                                        self.LogisticResultsPredictedProbabilityList)
+
+            # Get the Precision-Recall curve and AUPRC
+            PrecisionResults, RecallResults, _ = precision_recall_curve(self.LogisticResultsTrueValueList, 
+                                            self.LogisticResultsPredictedProbabilityList)
+            self.AUPRC = auc(RecallResults, PrecisionResults)
+
+            numSamples = len(self.LogisticResultsPredictedProbabilityList)
+            predictedValueList = [0] * numSamples
+            for index in range(numSamples):
+                currentProbability = self.LogisticResultsPredictedProbabilityList[index]
+                if (currentProbability >= self.OutputThreshold):
+                    predictedValueList[index] = 1
+
+            self.F1Score = f1_score(self.LogisticResultsTrueValueList, predictedValueList)
+        # End - if (self.IsLogisticNetwork):
+    # End of StopTesting
+
+
+
+    #####################################################
+    #
+    # [MLJobTestResults::ReadTestResultsFromXML
+    #
+    #####################################################
+    def ReadTestResultsFromXML(self):
+        # Every simple value (like <aa>5</aa>) is a named value in the result dict.
+        self.TestResults = {}
+        currentXMLNode = dxml.XMLTools_GetFirstChildNode(self.ResultXMLNode)
+        while (currentXMLNode is not None):
+            if (dxml.XMLTools_IsLeafNode(currentXMLNode)):
+                nameStr = dxml.XMLTools_GetElementName(currentXMLNode)
+                valueStr = dxml.XMLTools_GetTextContents(currentXMLNode)
+                try:
+                    self.TestResults[nameStr] = int(valueStr)
+                except Exception:
+                    self.TestResults[nameStr] = valueStr
+            # End - if (dxml.XMLTools_IsLeafNode(currentXMLNode)):
+
+            currentXMLNode = dxml.XMLTools_GetAnyPeerNode(currentXMLNode)
+        # End - while (currentXMLNode is not None):
+
+
+        self.NumSamplesTested = dxml.XMLTools_GetChildNodeTextAsInt(self.ResultXMLNode, 
+                                                    RESULTS_TEST_NUM_ITEMS_ELEMENT_NAME, 0)
+        self.ROCAUC = dxml.XMLTools_GetChildNodeTextAsFloat(self.ResultXMLNode, 
+                                                    RESULTS_ROCAUC_ELEMENT_NAME, 0)
+        self.AUPRC = dxml.XMLTools_GetChildNodeTextAsInt(self.ResultXMLNode, 
+                                                    RESULTS_AUPRC_ELEMENT_NAME, 0)
+        self.F1Score = dxml.XMLTools_GetChildNodeTextAsInt(self.ResultXMLNode, 
+                                                    RESULTS_F1Score_ELEMENT_NAME, 0)
+
+
+        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.ResultXMLNode, 
+                                                    RESULTS_TEST_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, "")
+        self.TestNumItemsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
+
+        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.ResultXMLNode, 
+                                                    RESULTS_TEST_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME, "")
+        self.TestNumPredictionsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
+
+        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.ResultXMLNode, 
+                                                    RESULTS_TEST_NUM_CORRECT_PER_CLASS_ELEMENT_NAME, "")
+        self.TestNumCorrectPerClass = MLJob_ConvertStringTo1DVector(resultStr)
+
+
+        self.LogisticResultsTrueValueList = []
+        self.LogisticResultsPredictedProbabilityList = []
+        if (self.IsLogisticNetwork):
+            resultStr = dxml.XMLTools_GetChildNodeText(self.ResultXMLNode, RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME)
+            if ((resultStr is not None) and (resultStr != "")):
+                resultArray = resultStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
+                for truthProbabilityPair in resultArray:
+                    valuePair = truthProbabilityPair.split("=")
+                    if (len(valuePair) == 2):
+                        try:
+                            trueValue = round(float(valuePair[0]))
+                            probability = float(valuePair[1])
+                        except Exception:
+                            print("ReadTestResultsFromXML. EXCEPTION in reading Logistic results")
+                            continue
+
+                        #if (probability > 0): 
+                        #print("Read Logistic Input. probability=" + str(probability) + ", trueValue=" + str(trueValue))
+
+                        self.LogisticResultsTrueValueList.append(trueValue)
+                        self.LogisticResultsPredictedProbabilityList.append(probability)
+                # End - for truthProbabilityPair in resultArray:
+            # End - if ((resultStr not None) and (resultStr != "")):
+
+            self.ROCAUC = -1
+            if ((len(self.LogisticResultsTrueValueList) > 0) and (len(self.LogisticResultsPredictedProbabilityList) > 0)):
+                self.ROCAUC = roc_auc_score(self.LogisticResultsTrueValueList, 
+                                            self.LogisticResultsPredictedProbabilityList)
+        # End - if (self.IsLogisticNetwork):
+    # End - ReadTestResultsFromXML
+
+
+
+
+
+    #####################################################
+    #
+    # [MLJobTestResults::WriteTestResultsToXML
+    #
+    #####################################################
+    def WriteTestResultsToXML(self):
+        for index, (valName, value) in enumerate(self.TestResults.items()):
+            dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, valName, str(value))
+
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_TEST_NUM_ITEMS_ELEMENT_NAME, 
+                                                        str(self.NumSamplesTested))
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_ROCAUC_ELEMENT_NAME, str(self.ROCAUC))
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_AUPRC_ELEMENT_NAME, str(self.AUPRC))
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_F1Score_ELEMENT_NAME, str(self.F1Score))
+
+        resultStr = MLJob_Convert1DVectorToString(self.TestNumItemsPerClass)
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_TEST_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, resultStr)
+
+        resultStr = MLJob_Convert1DVectorToString(self.TestNumPredictionsPerClass)
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_TEST_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME, resultStr)
+
+        resultStr = MLJob_Convert1DVectorToString(self.TestNumCorrectPerClass)
+        dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_TEST_NUM_CORRECT_PER_CLASS_ELEMENT_NAME, resultStr)
+
+
+        # This saves the values for Logistic function outputs
+        # These are used to compute AUROC and AUPRC
+        if (self.IsLogisticNetwork):
+            logisticOutputsStr = ""
+            listLength = len(self.LogisticResultsTrueValueList)
+            for index in range(listLength):
+                trueValue = self.LogisticResultsTrueValueList[index]
+                probability = self.LogisticResultsPredictedProbabilityList[index]
+                logisticOutputsStr = logisticOutputsStr + str(trueValue) + "=" + str(probability) + MLJOB_NAMEVAL_SEPARATOR_CHAR
+            if (logisticOutputsStr != ""):
+                logisticOutputsStr = logisticOutputsStr[:-1]
+                dxml.XMLTools_AddChildNodeWithText(self.ResultXMLNode, RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME, logisticOutputsStr)
+        # End - if (self.IsLogisticNetwork):
+    # End - WriteTestResultsToXML
+
+
+# End - class MLJobTestResults
+################################################################################
+
+
+
 
 
 
@@ -459,8 +823,6 @@ class MLJob():
     #####################################################
     def __init__(self):
         self.JobFilePathName = ""
-        self.OriginalFilePathname = ""
-
         self.FormatVersion = DEFAULT_JOB_FORMAT_VERSION
 
         # These are the sections of the JOB spec
@@ -470,14 +832,16 @@ class MLJob():
         self.DataXMLNode = None
         self.NetworkLayersXMLNode = None
         self.TrainingXMLNode = None
+        self.RuntimeXMLNode = None
 
         self.ResultsXMLNode = None
         self.ResultsPreflightXMLNode = None
         self.ResultsTrainingXMLNode = None
         self.ResultsTestingXMLNode = None
 
-        self.RuntimeXMLNode = None
-        self.TestListXMLNode = None
+        self.AllTestResults = MLJobTestResults()
+        self.NumResultClasses = 0
+        self.numInputVars = -1
 
         self.SavedModelStateXMLNode = None
         self.NeuralNetMatrixListXMLNode = None
@@ -494,20 +858,24 @@ class MLJob():
         self.NetworkType = ""
         self.AllowGPU = False
 
-        self.NumSamplesTested = 0
-        self.TestResults = {}
+        self.HashDict = {}
+        self.RuntimeNonce = 0
 
-        self.NumResultClasses = 0
-        self.numInputVars = -1
+        self.TrainingValueName = ""
+        self.TrainingValueInfoSrc = ""
+        self.TrainingValueRefDate = ""
+        self.TrainingResultMinValue = -1
+        self.TrainingResultMaxValue = -1
+        self.TrainingResultMeanValue = -1
+        self.TrainingNumResultPriorities = 0
+        self.TrainingResultBucketSize = 1
+        self.TrainingResultClassPriorities = []
 
         self.NumResultsInPreflight = 0
         self.PreflightNumItemsPerClass = []
         self.PreflightInputMins = []
         self.PreflightInputMaxs = []
-        self.PreflightInputSums = []
-        self.PreflightMeanInput = []
-        self.InputDivergenceFromMeanTotal = []
-        self.InputStdDevList = []
+        self.PreflightInputRanges = []
 
         self.ResultValMinValue = 0
         self.ResultValMaxValue = 0
@@ -519,47 +887,27 @@ class MLJob():
         self.TotalTrainingLossInCurrentEpoch = 0.0
         self.NumTrainLossValuesCurrentEpoch = 0
         self.BufferedLogLines = ""
-        self.DebugEvents = dataShow.EventTimeline()
         self.ResultValueType = tdf.TDF_DATA_TYPE_INT
         self.TrainingPriorities = [-1] * 1
-        self.PreflightCentroidType = MLJOB_CENTROID_TYPE_FIXED
-        self.PreflightNumCentroids = 0
-        self.PreflightGlobalCentroidInputVals = None
-        self.PreflightGlobalCentroidInputTotals = None
-        self.PreflightGlobalCentroidInputMeans = None
-        self.PreflightGlobalCentroidResultClassNums = None
-        self.PreflightGlobalCentroidNumChildren = None
-        self.PreflightGlobalCentroidMaxDistance = None
-        self.PreflightResultClassCentroidInputVals = None
-        self.PreflightResultClassCentroidInputTotals = None
-        self.PreflightResultClassCentroidInputMean = None
-        self.PreflightResultClassCentroidNumChildren = None
-        self.PreflightResultClassCentroidPerMaxDistance = None
-        self.PreflightInputSumsPerClass = [[0] * 1 for i in range(1)]
-        self.PreflightResultClassDict = {}
         self.PreflightResultClassWeights = []
 
-        self.TrainingTotalDevInputVar = None
-        self.TrainingStdDevInputVar = None
-
         self.TrainNumItemsPerClass = []
-
-        self.TestNumItemsPerClass = []
-        self.TestNumPredictionsPerClass = []
-        self.TestNumCorrectPerClass = []
 
         self.Debug = False
         self.LogFilePathname = ""
 
         self.OutputThreshold = -1
         self.IsLogisticNetwork = False
-        self.LogisticResultsTrueValueList = []
-        self.LogisticResultsPredictedProbabilityList = []
-        self.ROCAUC = -1
-        self.AUPRC = -1
-        self.F1Score = -1
 
-        self.InitRuntimeStateImpl()
+        # Runtime State
+        self.StartRequestTimeStr = ""
+        self.StopRequestTimeStr = ""
+    
+        self.CurrentEpochNum = 0
+        self.TotalTrainingLossInCurrentEpoch = 0.0
+        self.NumTrainLossValuesCurrentEpoch = 0
+
+        self.BufferedLogLines = ""
     # End -  __init__
 
 
@@ -584,279 +932,35 @@ class MLJob():
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_IDLE)
         self.SetJobControlStr(JOBCTL_RESULT_MSG_ELEMENT_NAME, "")
         self.SetJobControlStr(JOBCTL_ERROR_CODE_ELEMENT_NAME, str(JOB_E_NO_ERROR))
+        self.SetJobControlStr(JOBCTL_RUN_OPTIONS_ELEMENT_NAME, "")
 
         self.DataXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, DATA_ELEMENT_NAME)
-
         self.NetworkLayersXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, NETWORK_ELEMENT_NAME)
-
         self.TrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TRAINING_ELEMENT_NAME)
-
-        self.ResultsXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RESULTS_ELEMENT_NAME)
-        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
-        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
-        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
-
         self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
 
-        self.TestListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TEST_LIST_XML_NODE_NAME)
+        self.ResultsXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RESULTS_ELEMENT_NAME)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                        RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                        RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                        RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+
 
         # The saved state
-        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, SAVED_MODEL_STATE_ELEMENT_NAME)
-        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, NETWORK_MATRIX_LIST_NAME)
+        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, 
+                                                        SAVED_MODEL_STATE_ELEMENT_NAME)
+        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, 
+                                                        NETWORK_MATRIX_LIST_NAME)
+
+        self.HashDict = {}
+        self.RuntimeNonce = 0
 
         self.InferResultInfo()
-        # TestResults is initialized when we start testing or when we read a job from meomory or file
     # End of InitNewJobImpl
 
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::ReadJobFromString]
-    #
-    # Return JOB_E_NO_ERROR or an error
-    #####################################################
-    def ReadJobFromString(self, jobString):
-        #print("MLJob::ReadJobFromString")
-
-        if (jobString == ""):
-            return JOB_E_INVALID_FILE
-
-        # Parse the text string into am XML DOM
-        self.JobXMLDOM = dxml.XMLTools_ParseStringToDOM(jobString)
-        if (self.JobXMLDOM is None):
-            return JOB_E_INVALID_FILE
-
-        self.RootXMLNode = dxml.XMLTools_GetNamedElementInDocument(self.JobXMLDOM, ROOT_ELEMENT_NAME)
-        if (self.RootXMLNode is None):
-            return JOB_E_INVALID_FILE
-
-        self.FormatVersion = DEFAULT_JOB_FORMAT_VERSION
-        attrStr = dxml.XMLTools_GetAttribute(self.RootXMLNode, FORMAT_VERSION_ATTRIBUTE)
-        if ((attrStr is not None) and (attrStr != "")):
-            self.FormatVersion = int(attrStr)
-
-        ###############
-        self.JobControlXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, JOB_CONTROL_ELEMENT_NAME)
-        self.DataXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, DATA_ELEMENT_NAME)
-        self.NetworkLayersXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, NETWORK_ELEMENT_NAME)
-        self.TrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TRAINING_ELEMENT_NAME)
-
-        self.ResultsXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RESULTS_ELEMENT_NAME)
-        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
-        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
-        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
-
-        self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
-        self.TestListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TEST_LIST_XML_NODE_NAME)
-
-        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, SAVED_MODEL_STATE_ELEMENT_NAME)
-        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, NETWORK_MATRIX_LIST_NAME)
-
-        self.NetworkType = self.GetNetworkType().lower()
-        self.IsLogisticNetwork = dxml.XMLTools_GetChildNodeTextAsBool(self.NetworkLayersXMLNode, 
-                                                                    NETWORK_LOGISTIC_ELEMENT_NAME, False)
-
-        self.Debug = False
-        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "Debug")
-        if (xmlNode is not None):
-            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
-            resultStr = resultStr.lower().lstrip()
-            if (resultStr in ("on", "true", "yes", "1")):
-                self.Debug = True
-
-        self.AllowGPU = True
-        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "AllowGPU")
-        if (xmlNode is not None):
-            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
-            resultStr = resultStr.lower().lstrip()
-            if (resultStr in ("off", "false", "no", "0")):
-                self.AllowGPU = True
-
-        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "LogFilePathname")
-        if (xmlNode is not None):
-            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
-            resultStr = resultStr.lstrip().rstrip()
-            self.LogFilePathname = resultStr
-
-
-        # Read any runtime if it is present. No error if it is missing.
-        #
-        # This is used when 
-        # 1. Sending jobs between a dispatcher process and a child worker process
-        #    In this case, it is not normally stored in a file. 
-        #
-        # 2. Using a pre-trained neural network to make a prediction on some new data.
-        #
-        # 3. To "suspend" runtime state and resume it at a later date.
-        #    This is not supported now and would raise some tricky synchronization issues.
-        self.ReadRuntimeFromXML(self.RuntimeXMLNode)
-
-        # Figure out the result value type and properties. These are used at 
-        # runtime, but all infer directly from the name of the output variable so
-        # we do not write these to the file.
-        self.InferResultInfo()
-
-        # Read the results for both testing and training
-        # This will overwrite any values that were intiialized.
-        # But, initializing first means anything not stored in the XML file will still be initialized
-        self.ReadPreflightResultsFromXML(self.ResultsPreflightXMLNode)
-        self.ReadTrainResultsFromXML(self.ResultsTrainingXMLNode)
-        self.ReadTestResultsFromXML(self.ResultsTestingXMLNode)
-
-        return JOB_E_NO_ERROR
-    # End of ReadJobFromString
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::WriteJobToString]
-    #
-    #####################################################
-    def WriteJobToString(self):
-        # Write the current runtime to a temporary node that is just used for 
-        # holding an incomplete request that is currently executing
-        # This is used when sending jobs between a dispatcher process and a
-        # child worker process, and is not normally stored in a file. It could
-        # be saved to a file if we ever want to "suspend" runtime state and
-        # resume it at a later date, but that is not supported now and would
-        # raise some tricky synchronization issues.
-        self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
-        self.WriteRuntimeToXML(self.RuntimeXMLNode)
-
-        self.WritePreflightResultsToXML(self.ResultsPreflightXMLNode)
-        self.WriteTrainResultsToXML(self.ResultsTrainingXMLNode)
-        self.WriteTestResultsToXML(self.ResultsTestingXMLNode)
-
-        # Remove any previous formatting text so we can format
-        dxml.XMLTools_RemoveAllWhitespace(self.RootXMLNode)
-
-        # Don't add indentation or newlines. Those accumulate each time
-        # the XML is serialized/deserialized, so for a large job the whitespace
-        # grows to dwarf the actual content.        
-        resultStr = self.JobXMLDOM.toprettyxml(indent="    ", newl="\n", encoding=None)
-        #resultStr = resultStr.replace("\n", "")
-        #resultStr = resultStr.replace("\r", "")
-        #resultStr = resultStr.replace("   ", "")
-        #resultStr = resultStr.replace("  ", "")
-
-        return resultStr
-    # End of WriteJobToString
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::InitRuntimeStateImpl
-    # 
-    #####################################################
-    def InitRuntimeStateImpl(self):
-        self.OriginalFilePathname = ""
-        self.StartRequestTimeStr = ""
-        self.StopRequestTimeStr = ""
-    
-        self.CurrentEpochNum = 0
-        self.TotalTrainingLossInCurrentEpoch = 0.0
-        self.NumTrainLossValuesCurrentEpoch = 0
-
-        self.BufferedLogLines = ""
-
-        self.DebugEvents = dataShow.EventTimeline()
-    # End -  InitRuntimeStateImpl
-
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::ReadRuntimeFromXML]
-    #
-    #####################################################
-    def ReadRuntimeFromXML(self, parentXMLNode):
-        #print("MLJob::ReadRuntimeFromXML. Starting")
-
-        # Optionally, read any runtime if it is present.
-        # This is only used when sending jobs between a dispatcher process and a
-        # child worker process, and is not normally stored in a file. It could
-        # be saved to a file if we ever want to "suspend" runtime state and
-        # resume it at a later date, but that is not supported now and would
-        # raise some tricky synchronization issues.
-        #
-        # These are all optional. No error if any are missing.
-        self.OriginalFilePathname = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, "OriginalFilePathname", "")
-        self.StartRequestTimeStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, "StartRequestTimeStr", "")
-        self.StopRequestTimeStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, "StopRequestTimeStr", "")
-        self.CurrentEpochNum = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, "CurrentEpochNum", -1)
-        self.TotalTrainingLossInCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, "TotalTrainingLossInCurrentEpoch", -1.0)
-        self.NumTrainLossValuesCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, "NumTrainLossValuesCurrentEpoch", -1.0)
-
-        self.BufferedLogLines = dxml.XMLTools_GetChildNodeText(parentXMLNode, RUNTIME_LOG_NODE_ELEMENT_NAME)
-
-        ###################
-        # Debugging
-        self.DebugEvents = dataShow.EventTimeline()
-        xmlNode = dxml.XMLTools_GetChildNode(parentXMLNode, "DebugEvents")
-        if (xmlNode is not None):
-            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
-            resultStr = resultStr.lstrip()
-            if (resultStr != ""):
-                self.DebugEvents.DeserializeFromString(resultStr)
-            # End - if (resultStr != ""):
-        # End - if (xmlNode is not None):
-        self.DebugEvents.RecordOnlyNthValue(100)
-    # End - ReadRuntimeFromXML
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::WriteRuntimeToXML]
-    #
-    #####################################################
-    def WriteRuntimeToXML(self, parentXMLNode):
-        dxml.XMLTools_RemoveAllChildNodes(parentXMLNode)
-
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "OriginalFilePathname", str(self.OriginalFilePathname))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "StartRequestTimeStr", str(self.StartRequestTimeStr))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "StopRequestTimeStr", str(self.StopRequestTimeStr))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "CurrentEpochNum", str(self.CurrentEpochNum))
-
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "TotalTrainingLossInCurrentEpoch", str(self.TotalTrainingLossInCurrentEpoch))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "NumTrainLossValuesCurrentEpoch", str(self.NumTrainLossValuesCurrentEpoch))
-
-        ###################
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "OS", str(platform.platform()))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "CPU", str(platform.processor()))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "GPU", "None")
-
-        ###################
-        # If there is a log string, then add it to the end of the Result node.
-        if (self.BufferedLogLines != ""):
-            logXMLNode = dxml.XMLTools_GetChildNode(parentXMLNode, RUNTIME_LOG_NODE_ELEMENT_NAME)
-            if (logXMLNode is None):
-                logXMLNode = self.JobXMLDOM.createElement(RUNTIME_LOG_NODE_ELEMENT_NAME)
-                parentXMLNode.appendChild(logXMLNode)
-            dxml.XMLTools_SetTextContents(logXMLNode, self.BufferedLogLines)
-        # End - if (self.BufferedLogLines != "")
-
-
-
-        ###################
-        # Debugging
-        debugEventsXMLNode = dxml.XMLTools_GetOrCreateChildNode(parentXMLNode, "DebugEvents")
-        if (debugEventsXMLNode is not None):
-            serialStr = self.DebugEvents.SerializeToString()
-            dxml.XMLTools_SetTextContents(debugEventsXMLNode, serialStr)
-        # End - if (debugEventsXMLNode is not None):
-
-    # End -  WriteRuntimeToXML
 
 
 
@@ -882,7 +986,6 @@ class MLJob():
         # Update the file name. If we renamed a file when it was closed,
         # we need to save this new file name.
         self.JobFilePathName = jobFilePathName
-        self.OriginalFilePathname = jobFilePathName
 
         return err
     # End of ReadJobFromFile
@@ -896,6 +999,10 @@ class MLJob():
     # Insert the runtime node and results node
     #####################################################
     def SaveAs(self, jobFilePathName):
+        # Update the file name. If we renamed a file when it was closed,
+        # we need to save this new file name.
+        self.JobFilePathName = jobFilePathName
+
         contentsText = self.WriteJobToString()
 
         fileH = open(jobFilePathName, "w")
@@ -911,6 +1018,10 @@ class MLJob():
     #
     #####################################################
     def SaveJobWithoutRuntime(self, jobFilePathName):
+        # Update the file name. If we renamed a file when it was closed,
+        # we need to save this new file name.
+        self.JobFilePathName = jobFilePathName
+
         # Do not call self.WriteJobToString();
         # That will insert the runtime node and results node, which
         # can be confusing for an input job.
@@ -967,6 +1078,284 @@ class MLJob():
 
 
 
+
+    #####################################################
+    #
+    # [MLJob::ReadJobFromString]
+    #
+    # Return JOB_E_NO_ERROR or an error
+    #####################################################
+    def ReadJobFromString(self, jobString):
+        #print("MLJob::ReadJobFromString. jobString=" + jobString)
+
+        if (jobString == ""):
+            return JOB_E_INVALID_FILE
+
+        # Parse the text string into am XML DOM
+        self.JobXMLDOM = dxml.XMLTools_ParseStringToDOM(jobString)
+        if (self.JobXMLDOM is None):
+            return JOB_E_INVALID_FILE
+
+        self.RootXMLNode = dxml.XMLTools_GetNamedElementInDocument(self.JobXMLDOM, ROOT_ELEMENT_NAME)
+        if (self.RootXMLNode is None):
+            return JOB_E_INVALID_FILE
+
+        self.FormatVersion = DEFAULT_JOB_FORMAT_VERSION
+        attrStr = dxml.XMLTools_GetAttribute(self.RootXMLNode, FORMAT_VERSION_ATTRIBUTE)
+        if ((attrStr is not None) and (attrStr != "")):
+            self.FormatVersion = int(attrStr)
+
+        ###############
+        self.JobControlXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, JOB_CONTROL_ELEMENT_NAME)
+        self.DataXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, DATA_ELEMENT_NAME)
+        self.NetworkLayersXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, NETWORK_ELEMENT_NAME)
+        self.TrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TRAINING_ELEMENT_NAME)
+
+        self.ResultsXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RESULTS_ELEMENT_NAME)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+
+        self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
+
+        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, SAVED_MODEL_STATE_ELEMENT_NAME)
+        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, NETWORK_MATRIX_LIST_NAME)
+
+        self.NetworkType = self.GetNetworkType().lower()
+        self.IsLogisticNetwork = dxml.XMLTools_GetChildNodeTextAsBool(self.NetworkLayersXMLNode, 
+                                                                    NETWORK_LOGISTIC_ELEMENT_NAME, False)
+
+        self.OutputThreshold = -1
+        # The default is any probability over 50% is True. This is a coin-toss.
+        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.NetworkLayersXMLNode, 
+                                                                    NETWORK_OUTPUT_THRESHOLD_ELEMENT_NAME, "0.5")
+        if ((resultStr is not None) and (resultStr != "")):
+            try:
+                self.OutputThreshold = float(resultStr)
+            except Exception:
+                self.OutputThreshold = -1
+
+        self.Debug = False
+        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "Debug")
+        if (xmlNode is not None):
+            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
+            resultStr = resultStr.lower().lstrip()
+            if (resultStr in ("on", "true", "yes", "1")):
+                self.Debug = True
+
+        self.AllowGPU = True
+        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "AllowGPU")
+        if (xmlNode is not None):
+            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
+            resultStr = resultStr.lower().lstrip()
+            if (resultStr in ("off", "false", "no", "0")):
+                self.AllowGPU = True
+
+        xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, "LogFilePathname")
+        if (xmlNode is not None):
+            resultStr = dxml.XMLTools_GetTextContents(xmlNode)
+            resultStr = resultStr.lstrip().rstrip()
+            self.LogFilePathname = resultStr
+
+        self.ReadTrainingConfigFromXML(self.TrainingXMLNode)
+
+        # Read any runtime if it is present. No error if it is missing.
+        #
+        # This is used when 
+        # 1. Sending jobs between a dispatcher process and a child worker process
+        #    In this case, it is not normally stored in a file. 
+        #
+        # 2. Using a pre-trained neural network to make a prediction on some new data.
+        #
+        # 3. To "suspend" runtime state and resume it at a later date.
+        #    This is not supported now and would raise some tricky synchronization issues.
+        self.ReadRuntimeFromXML(self.RuntimeXMLNode)
+
+        # Figure out the result value type and properties. These are used at 
+        # runtime, but all infer directly from the name of the output variable so
+        # we do not write these to the file.
+        self.InferResultInfo()
+
+        # Read the results for both testing and training
+        # This will overwrite any values that were intiialized.
+        # But, initializing first means anything not stored in the XML file will still be initialized
+        self.ReadPreflightResultsFromXML(self.ResultsPreflightXMLNode)
+        self.ReadTraingResultsFromXML(self.ResultsTrainingXMLNode)
+        self.ReadTestResultsFromXML(self.ResultsTestingXMLNode)
+
+        return JOB_E_NO_ERROR
+    # End of ReadJobFromString
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::WriteJobToString]
+    #
+    #####################################################
+    def WriteJobToString(self):
+        # Write the current runtime to a temporary node that is just used for 
+        # holding an incomplete request that is currently executing
+        # This is used when sending jobs between a dispatcher process and a
+        # child worker process, and is not normally stored in a file. It could
+        # be saved to a file if we ever want to "suspend" runtime state and
+        # resume it at a later date, but that is not supported now and would
+        # raise some tricky synchronization issues.
+        self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
+        self.WriteRuntimeToXML(self.RuntimeXMLNode)
+
+        self.WritePreflightResultsToXML(self.ResultsPreflightXMLNode)
+        self.WriteTrainResultsToXML(self.ResultsTrainingXMLNode)
+        self.WriteTestResultsToXML(self.ResultsTestingXMLNode)
+
+        # Remove any previous formatting text so we can format
+        dxml.XMLTools_RemoveAllWhitespace(self.RootXMLNode)
+
+        # Don't add indentation or newlines. Those accumulate each time
+        # the XML is serialized/deserialized, so for a large job the whitespace
+        # grows to dwarf the actual content.        
+        resultStr = self.JobXMLDOM.toprettyxml(indent="    ", newl="\n", encoding=None)
+        #resultStr = resultStr.replace("\n\r ", "")
+        #resultStr = resultStr.replace("\r", "")
+        #resultStr = resultStr.replace("   ", "")
+        #resultStr = resultStr.replace("  ", "")
+
+        return resultStr
+    # End of WriteJobToString
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::ReadTrainingConfigFromXML]
+    #
+    # There are two similar but importantly different procedures:
+    #
+    # 1. ReadTrainingConfigFromXML - Read the training configuration from 
+    #   the Training section. This is read, but never written, because it
+    #   is static configuration that is in the file, not results from execution.
+    #
+    # 2. ReadTraingResultsFromXML - Read the results of training, from the
+    #   results section.
+    #####################################################
+    def ReadTrainingConfigFromXML(self, parentXMLNode):
+        valueInfoNode = dxml.XMLTools_GetChildNode(parentXMLNode, TRAINING_PRIORITY_VALUE_INFO)
+
+        self.TrainingValueName = dxml.XMLTools_GetChildNodeTextAsStr(valueInfoNode, 
+                                                            TRAINING_PRIORITY_VALUE_NAME, "")
+        self.TrainingValueInfoSrc = dxml.XMLTools_GetChildNodeTextAsStr(valueInfoNode, 
+                                                            TRAINING_PRIORITY_SRC_FILE, "")
+        self.TrainingValueRefDate = dxml.XMLTools_GetChildNodeTextAsStr(valueInfoNode, 
+                                                            TRAINING_PRIORITY_CREATION_DATE, "")
+        self.TrainingResultMinValue = dxml.XMLTools_GetChildNodeTextAsFloat(valueInfoNode, 
+                                                            TRAINING_PRIORITY_MIN_VALUE, -1)
+        self.TrainingResultMaxValue = dxml.XMLTools_GetChildNodeTextAsFloat(valueInfoNode, 
+                                                            TRAINING_PRIORITY_MAX_VALUE, -1)
+        self.TrainingResultMeanValue = dxml.XMLTools_GetChildNodeTextAsFloat(valueInfoNode, 
+                                                            TRAINING_PRIORITY_MEAN_VALUE, -1)
+        self.TrainingNumResultPriorities = dxml.XMLTools_GetChildNodeTextAsInt(valueInfoNode, 
+                                                            TRAINING_PRIORITY_NUM_CLASSES, -1)
+
+        valueRange = self.TrainingResultMaxValue - self.TrainingResultMinValue
+        self.TrainingResultBucketSize = (valueRange / self.TrainingNumResultPriorities)
+
+        listStr = dxml.XMLTools_GetChildNodeTextAsStr(valueInfoNode, TRAINING_PRIORITY_CLASS_PRIORITIES, "")
+        priorityStrList = listStr.split(",")
+        self.TrainingResultClassPriorities = [int(i) for i in priorityStrList]
+    # End - ReadTrainingConfigFromXML
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::ReadRuntimeFromXML]
+    #
+    #####################################################
+    def ReadRuntimeFromXML(self, parentXMLNode):
+        ###################
+        # Basics
+        # These are all optional. No error if any are missing.
+        # Save the current file pathname in the XML so it can be restored when we pass a job back and 
+        # forth in memory between processes.
+        self.JobFilePathName = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
+                                                            RUNTIME_FILE_PATHNAME_ELEMENT_NAME, "")
+        self.StartRequestTimeStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
+                                                            RUNTIME_START_ELEMENT_NAME, "")
+        self.StopRequestTimeStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
+                                                            RUNTIME_STOP_ELEMENT_NAME, "")
+        self.CurrentEpochNum = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
+                                                            RUNTIME_CURRENT_EPOCH_ELEMENT_NAME, -1)
+        self.RuntimeNonce = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, RUNTIME_NONCE_ELEMENT_NAME, 0)
+
+
+        self.TotalTrainingLossInCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, 
+                                                            "TotalTrainingLossInCurrentEpoch", -1.0)
+        self.NumTrainLossValuesCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, 
+                                                            "NumTrainLossValuesCurrentEpoch", -1.0)
+
+        ###################
+        self.BufferedLogLines = dxml.XMLTools_GetChildNodeText(parentXMLNode, RUNTIME_LOG_NODE_ELEMENT_NAME)
+
+        ###################
+        # Read the latest Hash table
+        hashStr = dxml.XMLTools_GetChildNodeText(parentXMLNode, RUNTIME_HASH_DICT_ELEMENT_NAME)
+        if ((hashStr is not None) and (hashStr != "")):
+            self.HashDict = json.loads(hashStr)
+    # End - ReadRuntimeFromXML
+
+
+
+
+
+    #####################################################
+    #
+    # [MLJob::WriteRuntimeToXML]
+    #
+    #####################################################
+    def WriteRuntimeToXML(self, parentXMLNode):
+        dxml.XMLTools_RemoveAllChildNodes(parentXMLNode)
+
+        ###################
+        # Basics
+        # Save the current file pathname in the XML so it can be restored when we pass a job back and 
+        # forth in memory between processes.
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_FILE_PATHNAME_ELEMENT_NAME, str(self.JobFilePathName))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_START_ELEMENT_NAME, str(self.StartRequestTimeStr))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_STOP_ELEMENT_NAME, str(self.StopRequestTimeStr))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_CURRENT_EPOCH_ELEMENT_NAME, str(self.CurrentEpochNum))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_NONCE_ELEMENT_NAME, str(self.RuntimeNonce))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "OS", str(platform.platform()))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "CPU", str(platform.processor()))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "GPU", "None")
+
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "TotalTrainingLossInCurrentEpoch", 
+                                            str(self.TotalTrainingLossInCurrentEpoch))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "NumTrainLossValuesCurrentEpoch", 
+                                            str(self.NumTrainLossValuesCurrentEpoch))
+
+        ###################
+        # If there is a log string, then add it to the end of the Result node.
+        if (self.BufferedLogLines != ""):
+            logXMLNode = dxml.XMLTools_GetChildNode(parentXMLNode, RUNTIME_LOG_NODE_ELEMENT_NAME)
+            if (logXMLNode is None):
+                logXMLNode = self.JobXMLDOM.createElement(RUNTIME_LOG_NODE_ELEMENT_NAME)
+                parentXMLNode.appendChild(logXMLNode)
+            dxml.XMLTools_SetTextContents(logXMLNode, self.BufferedLogLines)
+        # End - if (self.BufferedLogLines != "")
+
+        ###################
+        # Save the list of Matrix hash values
+        hashStr = json.dumps(self.HashDict)
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_HASH_DICT_ELEMENT_NAME, hashStr)
+    # End -  WriteRuntimeToXML
+
+
+
+
     #####################################################
     #
     # [MLJob::StartJobExecution]
@@ -979,20 +1368,13 @@ class MLJob():
         self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
         self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
 
         # Each request has a single test. When we finish the test, we have
         # finished the entire reqeust.
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_IDLE)
         self.SetJobControlStr(JOBCTL_RESULT_MSG_ELEMENT_NAME, "")
         self.SetJobControlStr(JOBCTL_ERROR_CODE_ELEMENT_NAME, str(JOB_E_NO_ERROR))
-
-        # Discard any previous saved state
-        self.SetNamedStateAsStr(SAVED_STATE_TYPE_ELEMENT_NAME, "")
-        self.SetNamedStateAsStr(SAVED_STATE_FILE_PATH_ELEMENT_NAME, "")
-
-        # Save the current file pathname in the XML so it can be restored when we pass a job back and 
-        # forth in memory between processes.
-        self.OriginalFilePathname = self.JobFilePathName
 
         now = datetime.now()
         self.StartRequestTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -1036,33 +1418,15 @@ class MLJob():
         now = datetime.now()
         self.StopRequestTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Remove earlier results
+        # Remove earlier results. We will write the final results when we save the job to XML
         dxml.XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
         self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
         self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
 
-        if (self.IsLogisticNetwork):
-            # Get the Receiver Operator Curve AUC
-            self.ROCAUC = roc_auc_score(self.LogisticResultsTrueValueList, 
-                                        self.LogisticResultsPredictedProbabilityList)
-
-            # Get the Precision-Recall curve and AUPRC
-            PrecisionResults, RecallResults, _ = precision_recall_curve(self.LogisticResultsTrueValueList, 
-                                            self.LogisticResultsPredictedProbabilityList)
-            self.AUPRC = auc(RecallResults, PrecisionResults)
-
-            numSamples = len(self.LogisticResultsPredictedProbabilityList)
-            predictedValueList = [0] * numSamples
-            for index in range(numSamples):
-                currentProbability = self.LogisticResultsPredictedProbabilityList[index]
-                if (currentProbability >= self.OutputThreshold):
-                    predictedValueList[index] = 1
-
-            self.F1Score = f1_score(self.LogisticResultsTrueValueList, predictedValueList)
-        # End - if (self.IsLogisticNetwork):
+        self.AllTestResults.StopTesting()
     # End of FinishJobExecution
-
 
 
 
@@ -1085,125 +1449,37 @@ class MLJob():
 
         if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
             self.NumResultClasses = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS
-            self.ResultValMinValue = 0
-            self.ResultValMaxValue = 0
+            self.ResultValMinValue, self.ResultValMaxValue = tdf.TDF_GetMinMaxValuesForVariable(resultValName)
+            valRange = float(self.ResultValMaxValue - self.ResultValMinValue)
+            self.ResultValBucketSize = float(valRange) / float(ML_JOB_NUM_NUMERIC_VALUE_BUCKETS)
         elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
             self.NumResultClasses = tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES
             self.ResultValMinValue = 0
             self.ResultValMaxValue = tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES - 1
+            self.ResultValBucketSize = 1
         elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
             self.NumResultClasses = 2
             self.ResultValMinValue = 0
             self.ResultValMaxValue = 1
+            self.ResultValBucketSize = 1
         else:
             self.NumResultClasses = 1
             self.ResultValMinValue = 0
             self.ResultValMaxValue = 0
-
-        # Figure out the result value type.
-        self.ResultValBucketSize = 1
-        if ((resultValName != "") and (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT))):
-            self.ResultValMinValue, self.ResultValMaxValue = tdf.TDF_GetMinMaxValuesForVariable(resultValName)
-            valRange = float(self.ResultValMaxValue - self.ResultValMinValue)
-            self.ResultValBucketSize = float(valRange) / float(ML_JOB_NUM_NUMERIC_VALUE_BUCKETS)
+            self.ResultValBucketSize = 1
 
         inputVarNameListStr = self.GetNetworkInputVarNames()
         inputVarArray = inputVarNameListStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
-
         self.numInputVars = len(inputVarArray)
+
+        self.AllTestResults.SetGlobalResultInfo(self.ResultValueType, 
+                                    self.NumResultClasses, 
+                                    self.ResultValMinValue, 
+                                    self.ResultValMaxValue, 
+                                    self.ResultValBucketSize, 
+                                    self.IsLogisticNetwork, 
+                                    self.OutputThreshold)
     # End - InferResultInfo
-
-
-    #####################################################
-    #
-    # [MLJob::GetNumTrainingPriorities]
-    # 
-    #####################################################
-    def GetNumTrainingPriorities(self):
-        return self.NumResultClasses
-    # End - GetNumTrainingPriorities
-
-
-    #####################################################
-    #
-    # [MLJob::GetMaxSkippedTrainingPriorities]
-    # 
-    #####################################################
-    def GetMaxSkippedTrainingPriorities(self):
-        configVal = dxml.XMLTools_GetChildNodeTextAsInt(self.TrainingXMLNode, TRAINING_MAX_NUM_SKIPPED_RESULT_CLASSES, -1)
-        if (configVal > 0):
-            return configVal
-
-        if (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            return 1
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            return ML_JOB_DEFAULT_MAX_SKIPPED_EVENT_CLASS_BUCKETS
-        else:  # self.ResultValueType == tdf.TDF_DATA_TYPE_FLOAT or self.ResultValueType == tdf.TDF_DATA_TYPE_INT):
-            return ML_JOB_DEFAULT_MAX_SKIPPED_NUMERIC_VALUE_BUCKETS
-    # End - GetMaxSkippedTrainingPriorities
-
-
-
-    #####################################################
-    #
-    # [MLJob::StartPrioritizingTrainingSamplesInPartition]
-    # 
-    # This is called when we start using the priorities during training.
-    # The priorities have already been established, now we apply them.
-    #####################################################
-    def StartPrioritizingTrainingSamplesInPartition(self):
-        fDebug = False
-
-        unsortedList = []
-        for resultClassNum in range(self.NumResultClasses):
-            numInstances = self.PreflightNumItemsPerClass[resultClassNum]
-            unsortedList.append({"c": resultClassNum, "n": numInstances})
-
-        newlist = sorted(unsortedList, key=lambda k: k["n"])
-        if (fDebug):
-            print("StartPrioritizingTrainingSamplesInPartition. newlist=" + str(newlist))
-
-        self.TrainingPriorities = [-1] * self.NumResultClasses
-        priority = 0
-        for resultClassInfo in newlist:
-            self.TrainingPriorities[resultClassInfo["c"]] = priority
-            priority += 1
-        # End - for resultClassInfo in newlist
-    # End - StartPrioritizingTrainingSamplesInPartition
-
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::GetTrainingPriority]
-    # 
-    #####################################################
-    def GetTrainingPriority(self, trueResult):
-        fDebug = False
-
-        if (fDebug):
-            if ((int(trueResult) < 0) or (int(trueResult) > self.NumResultClasses)):
-                print("GetTrainingPriority. Invalid trueResult=" + str(trueResult))
-            print("GetTrainingPriority. self.TrainingPriorities=" + str(self.TrainingPriorities))
-            print("        self.NumResultClasses=" + str(self.NumResultClasses))
-        # End - if (fDebug):
-
-        #####################
-        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
-            resultBucket = int(trueResult)
-        #####################
-        elif (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            offset = max(int(trueResult) - self.ResultValMinValue, 0)
-            resultBucket = int(offset / self.ResultValBucketSize)
-            if (resultBucket >= self.NumResultClasses):
-                resultBucket = self.NumResultClasses - 1
-        else:
-            return(0)
-
-        return self.TrainingPriorities[resultBucket]
-    # End - GetTrainingPriority
 
 
 
@@ -1215,8 +1491,6 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def StartPreflight(self):
-        #print("MLJob::StartPreflight. Start")
-
         # Figure out the result value type and properties. These are used at 
         # runtime, but all infer directly from the name of the output variable so
         # we do not write these to the file.
@@ -1225,87 +1499,10 @@ class MLJob():
         self.PreflightNumItemsPerClass = numpy.zeros(self.NumResultClasses)
         self.PreflightInputMins = numpy.full((self.numInputVars), 1000000)
         self.PreflightInputMaxs = numpy.full((self.numInputVars), -1)
-        self.PreflightInputSums = numpy.zeros(self.numInputVars)
-        self.PreflightMeanInput = numpy.zeros(self.numInputVars)
-        self.InputDivergenceFromMeanTotal = numpy.zeros(self.numInputVars)
-        self.InputStdDevList = numpy.zeros(self.numInputVars)
-
-        # self.PreflightInputSumsPerClass is indexed as self.PreflightInputSumsPerClass[classNum][varNum]
-        self.PreflightInputSumsPerClass = numpy.zeros((self.NumResultClasses, self.numInputVars))
-
-        self.PreflightCentroidType = MLJOB_CENTROID_TYPE_FIXED
-        # We *could* have 1 centroid for every combination of a low and high value of a variable.
-        # This is 2 possible values per variable, for N variables. This is similar to a
-        # binary number of N digits, so there are 2**N combinations (which is a lot).
-        # Instead, let's do N centroids, each is all low values and 1 high value.
-        inputVarNameListStr = self.GetNetworkInputVarNames()
-        inputVarArray = inputVarNameListStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
-        self.PreflightNumCentroids = self.numInputVars
-
-        # Assign each Centroid to a random spot in the space.
-        # We *could* have 1 centroid for every combination of a low and high value of a variable.
-        # This is 2 possible values per variable, for N variables. This is similar to a
-        # binary number of N digits, so there are N**2 combinations (which is a lot)
-        self.PreflightGlobalCentroidInputVals = numpy.zeros((self.PreflightNumCentroids, self.numInputVars))
-        random.seed()
-        for valNum in range(self.numInputVars):
-            inputName = inputVarArray[valNum]
-            _, nameStem, _, _ = tdf.TDF_ParseOneVariableName(inputName)
-            labMinVal, labMaxVal = tdf.TDF_GetMinMaxValuesForVariable(nameStem)
-            varType = tdf.TDF_GetVariableType(nameStem)
-            valRange = max(labMaxVal - labMinVal, 0)
-            for centroidNum in range(self.PreflightNumCentroids):
-                randNum = random.uniform(0, 1)
-                if (varType == tdf.TDF_DATA_TYPE_BOOL):
-                    self.PreflightGlobalCentroidInputVals[centroidNum][valNum] = round(randNum)
-                elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FLOAT):
-                    self.PreflightGlobalCentroidInputVals[centroidNum][valNum] = (labMinVal + (randNum * valRange))
-                else:  # elif ((varType == tdf.TDF_DATA_TYPE_INT) or (varType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
-                    self.PreflightGlobalCentroidInputVals[centroidNum][valNum] = round(labMinVal + (randNum * valRange))
-            # End - for centroidNum in range(self.PreflightNumCentroids):
-        # End - for valNum in range(self.numInputVars):
-
-        self.PreflightGlobalCentroidInputTotals = numpy.zeros((self.PreflightNumCentroids, self.numInputVars))
-        self.PreflightGlobalCentroidInputMeans = numpy.zeros((self.PreflightNumCentroids, self.numInputVars))
-        self.PreflightGlobalCentroidResultClassNums = numpy.zeros((self.PreflightNumCentroids, self.NumResultClasses))
-        self.PreflightGlobalCentroidNumChildren = numpy.zeros(self.PreflightNumCentroids)
-        self.PreflightGlobalCentroidMaxDistance = numpy.zeros(self.PreflightNumCentroids)
-
-        self.PreflightResultClassCentroidInputVals = numpy.zeros((self.NumResultClasses, 
-                                                                    self.PreflightNumCentroids, 
-                                                                    self.numInputVars))
-        for valNum in range(self.numInputVars):
-            inputName = inputVarArray[valNum]
-            _, nameStem, _, _ = tdf.TDF_ParseOneVariableName(inputName)
-            labMinVal, labMaxVal = tdf.TDF_GetMinMaxValuesForVariable(nameStem)
-            varType = tdf.TDF_GetVariableType(nameStem)
-            valRange = max(labMaxVal - labMinVal, 0)
-
-            for resultClassNum in range(self.NumResultClasses):
-                for centroidNum in range(self.PreflightNumCentroids):
-                    randNum = random.uniform(0, 1)
-                    if (varType == tdf.TDF_DATA_TYPE_BOOL):
-                        self.PreflightResultClassCentroidInputVals[resultClassNum][centroidNum][valNum] = round(randNum)
-                    elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FLOAT):
-                        self.PreflightResultClassCentroidInputVals[resultClassNum][centroidNum][valNum] = (labMinVal + (randNum * valRange))
-                    else:  # elif ((varType == tdf.TDF_DATA_TYPE_INT) or (varType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS)):
-                        self.PreflightResultClassCentroidInputVals[resultClassNum][centroidNum][valNum] = round(labMinVal + (randNum * valRange))
-                # End - for centroidNum in range(self.PreflightNumCentroids):
-            # End - for classNum in range(self.NumResultClasses):
-        # End - for valNum in range(self.numInputVars):
-
-        self.PreflightResultClassCentroidInputTotals = numpy.zeros((self.NumResultClasses, 
-                                                                    self.PreflightNumCentroids,
-                                                                    self.numInputVars))
-        self.PreflightResultClassCentroidInputMean = numpy.zeros((self.NumResultClasses, 
-                                                                    self.PreflightNumCentroids,
-                                                                    self.numInputVars))
-        self.PreflightResultClassCentroidNumChildren = numpy.zeros((self.NumResultClasses, self.PreflightNumCentroids))
-        self.PreflightResultClassCentroidPerMaxDistance = numpy.zeros((self.NumResultClasses, self.PreflightNumCentroids))
+        self.PreflightInputRanges = numpy.full((self.numInputVars), 0)
 
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_PREFLIGHT)
     # End - StartPreflight
-
 
 
 
@@ -1317,39 +1514,6 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def PreflightData(self, inputVec, resultVal):
-        fDebug = False
-
-        # Get the bucket for this result value
-        #####################
-        if (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            resultBucket = int(resultVal)
-        #####################
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            resultBucket = int(resultVal)
-        #####################
-        elif (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            offset = max(resultVal - self.ResultValMinValue, 0)
-            resultBucket = int(offset / self.ResultValBucketSize)
-            if (resultBucket >= self.NumResultClasses):
-                resultBucket = self.NumResultClasses - 1
-
-        if (fDebug):
-            print("PreflightData. self.ResultValueType = " + str(self.ResultValueType))
-            print("PreflightData. resultBucket = " + str(resultBucket))
-       
-        self.NumResultsInPreflight += 1
-        self.PreflightNumItemsPerClass[resultBucket] += 1
-        if (fDebug):
-            print("PreflightData. self.PreflightNumItemsPerClass=" + str(self.PreflightNumItemsPerClass))
-
-        if (fDebug):
-            print("PreflightData. self.PreflightInputMins = " + str(self.PreflightInputMins))
-            print("PreflightData. self.PreflightInputMaxs = " + str(self.PreflightInputMaxs))
-            print("PreflightData. self.PreflightInputSums = " + str(self.PreflightInputSums))
-            print("PreflightData. self.NumInputVars=" + str(self.numInputVars))
-
-        self.PreflightInputSums += inputVec
-
         for valNum in range(self.numInputVars):
             currentValue = inputVec[valNum]
             if (currentValue < self.PreflightInputMins[valNum]):
@@ -1357,67 +1521,7 @@ class MLJob():
             if (currentValue > self.PreflightInputMaxs[valNum]):
                 self.PreflightInputMaxs[valNum] = currentValue
         # End - for valNum in range(self.numInputVars)
-
-        if (fDebug):
-            print("self.PreflightInputMins = " + str(self.PreflightInputMins))
-            print("self.PreflightInputMaxs = " + str(self.PreflightInputMaxs))
-            print("self.PreflightInputSums = " + str(self.PreflightInputSums))
-
-        # self.PreflightInputSumsPerClass is indexed as self.PreflightInputSumsPerClass[classNum][varNum]
-        self.PreflightInputSumsPerClass[resultBucket] = self.PreflightInputSumsPerClass[resultBucket] + inputVec
-
-        # Find the centroid that is closest to this data point.
-        chosenCentroid = -1
-        smallestDistance = -1
-        for centroidNum in range(self.PreflightNumCentroids):
-            currentCentroid = self.PreflightGlobalCentroidInputVals[centroidNum]
-            # Compute the Euclidean distance.
-            # For performance, this uses a trick: the L2 normal (ie the L2 loss) is the sqrt of the sum of squares of distance.
-            currentDistance = numpy.linalg.norm(inputVec - currentCentroid)
-            if ((chosenCentroid < 0) or ((chosenCentroid > 0) and (currentDistance < smallestDistance))):
-                chosenCentroid = centroidNum
-                smallestDistance = currentDistance
-        # for centroidNum in range(self.PreflightNumCentroids):
-
-        # Update stats for the chosen Centroid.
-        if (chosenCentroid >= 0):
-            self.PreflightGlobalCentroidInputTotals[chosenCentroid] += inputVec
-            self.PreflightGlobalCentroidNumChildren[chosenCentroid] += 1
-            self.PreflightGlobalCentroidResultClassNums[chosenCentroid][resultBucket] += 1
-            # If this new child is farther fromthe centroid than any other child of the same centroid, then
-            # record this. It is the outer border of the orbit for this centroid.
-            if (smallestDistance > self.PreflightGlobalCentroidMaxDistance[chosenCentroid]):
-                self.PreflightGlobalCentroidMaxDistance[chosenCentroid] = smallestDistance
-        # End - if (chosenCentroid >= 0):
-
-        # Now, repeat this process for the resultClass.
-        # <> Not sure if this is useful. Let's collect some data and see if it is meaningful/useful.
-        # If it isn't then remove this.
-        chosenCentroid = -1
-        smallestDistance = -1
-        for centroidNum in range(self.PreflightNumCentroids):
-            currentCentroid = self.PreflightResultClassCentroidInputVals[resultBucket][centroidNum]
-            # Compute the Euclidean distance.
-            # For performance, this uses a trick: the L2 normal (ie the L2 loss) is the sqrt of the sum of squares of distance.
-            currentDistance = numpy.linalg.norm(inputVec - currentCentroid)
-            if ((chosenCentroid < 0) or ((chosenCentroid > 0) and (currentDistance < smallestDistance))):
-                chosenCentroid = centroidNum
-                smallestDistance = currentDistance
-        # for centroidNum in range(self.PreflightNumCentroids):
-
-        # Update stats for the chosen Centroid.
-        if (chosenCentroid >= 0):
-            self.PreflightResultClassCentroidNumChildren[resultBucket][chosenCentroid] += 1
-            self.PreflightResultClassCentroidInputTotals[resultBucket][chosenCentroid] += inputVec
-            # If this new child is farther fromthe centroid than any other child of the same centroid, then
-            # record this. It is the outer border of the orbit for this centroid.
-            if (smallestDistance > self.PreflightResultClassCentroidPerMaxDistance[resultBucket][chosenCentroid]):
-                self.PreflightResultClassCentroidPerMaxDistance[resultBucket][chosenCentroid] = smallestDistance
-        # End - if (chosenCentroid >= 0):
-
-        self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_PREFLIGHT)
     # End - PreflightData
-
 
 
 
@@ -1425,45 +1529,60 @@ class MLJob():
     #
     # [MLJob::FinishPreflight
     # 
-    # This is a public procedure, it is called by the client.
     #####################################################
     def FinishPreflight(self):
-        # Compute the mean for each input val. This will be used to determine Std Dev 
-        # during training.
         for inputNum in range(self.numInputVars):
-            if (self.NumResultsInPreflight > 0):
-                self.PreflightMeanInput[inputNum] = self.PreflightInputSums[inputNum] / self.NumResultsInPreflight
-            else:
-                self.PreflightMeanInput[inputNum] = 0
+            self.PreflightInputRanges[inputNum] = self.PreflightInputMaxs[inputNum] - self.PreflightInputMins[inputNum]
         # End - for inputNum in range(self.numInputVars):
-
-        # Get the average number of items per class.
-        avgNumItemsPerClass = self.NumResultsInPreflight / self.NumResultClasses
-
-        # Compute the weight for each class
-        self.PreflightResultClassWeights = [0] * self.NumResultClasses
-        for resultClassNum in range(self.NumResultClasses):
-            numItemsInClass = self.PreflightNumItemsPerClass[resultClassNum]
-
-            if (numItemsInClass <= 0):
-                classWeight = 0
-            else:
-                classWeight = avgNumItemsPerClass / numItemsInClass
-
-            if (classWeight > 1.0):
-                classWeight = ADDITIONAL_MULTIPLIER_FOR_UNDERREPRESENTED_CLASSES * round(classWeight)
-            classWeight = max(classWeight, CLASS_WEIGHTS_LEVEL_FOR_REINTRODUCING_PRETEST_PROBABILITY)
-
-            self.PreflightResultClassWeights[resultClassNum] = classWeight
-        # End - for resultClassNum in range(self.NumResultClasses)
-
-        # Make a new runtime object for each resultClass element
-        self.PreflightResultClassDict = {}
-        for resultClassNum in range(self.NumResultClasses):
-            newResultClassInfo = {'weight': self.PreflightResultClassWeights[resultClassNum]}
-            self.PreflightResultClassDict[resultClassNum] = newResultClassInfo
-        # End - for resultClassNum in range(self.NumResultClasses)      
     # End - FinishPreflight
+
+
+    #####################################################
+    # [MLJob::GetPreflightResults]
+    #####################################################
+    def GetPreflightResults(self):
+        return self.numInputVars, self.PreflightInputMins, self.PreflightInputRanges
+    # End - GetPreflightResults
+
+
+    #####################################################
+    # [MLJob::GetNumTrainingPriorities]
+    #####################################################
+    def GetNumTrainingPriorities(self):
+        return self.TrainingNumResultPriorities
+
+
+    #####################################################
+    #
+    # [MLJob::GetTrainingPriority]
+    # 
+    #####################################################
+    def GetTrainingPriority(self, resultVal):
+        fDebug = False
+
+        #####################
+        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
+            offset = max((resultVal - self.TrainingResultMinValue), 0.0)
+            resultBucket = int(offset / self.TrainingResultBucketSize)
+            resultBucket = min(resultBucket, self.TrainingNumResultPriorities - 1)
+            if (fDebug):
+                print("GetTrainingPriority. resultVal = " + str(resultVal))
+                print("    self.TrainingResultMinValue=" + str(self.TrainingResultMinValue))
+                print("    offset=" + str(offset))
+                print("    self.TrainingResultBucketSize=" + str(self.TrainingResultBucketSize))
+                print("    resultBucket=" + str(resultBucket))
+                print("    self.TrainingResultClassPriorities=" + str(self.TrainingResultClassPriorities))
+                print("    Priority=" + str(self.TrainingResultClassPriorities[resultBucket]))
+            # End - if (fDebug):
+
+            return self.TrainingResultClassPriorities[resultBucket]
+        #####################
+        elif (self.ResultValueType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
+            return 0
+        else:
+            return(0)
+    # End - GetTrainingPriority
+
 
 
 
@@ -1491,25 +1610,13 @@ class MLJob():
 
         self.TotalTrainingLossInCurrentEpoch = 0.0
         self.NumTrainLossValuesCurrentEpoch = 0
-
         self.AvgLossPerEpochList = []
-
-        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            self.NumResultClasses = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            self.NumResultClasses = tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            self.NumResultClasses = 2
-        else:
-            self.NumResultClasses = 1
 
         self.TrainNumItemsPerClass = [0] * self.NumResultClasses
 
-        self.TrainingTotalDevInputVar = numpy.zeros(self.numInputVars)
-        self.TrainingStdDevInputVar = numpy.zeros(self.numInputVars)
-
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_TRAINING)
     # End - StartTraining
+
 
 
 
@@ -1527,7 +1634,6 @@ class MLJob():
 
 
 
-
     #####################################################
     #
     # [MLJob::RecordTrainingLoss
@@ -1535,10 +1641,10 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def RecordTrainingLoss(self, loss):
-        self.TotalTrainingLossInCurrentEpoch += loss
+        # Be careful, the loss may be positive or negative
+        self.TotalTrainingLossInCurrentEpoch += abs(loss)
         self.NumTrainLossValuesCurrentEpoch += 1
     # End -  RecordTrainingLoss
-
 
 
 
@@ -1559,30 +1665,22 @@ class MLJob():
         self.NumSamplesTrainedPerEpoch += 1
 
         #####################
-        if (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            intActualValue = max(int(actualValue), 0)
-            intActualValue = min(int(actualValue), tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES - 1)
-            self.TrainNumItemsPerClass[intActualValue] += 1
+        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
+            offset = max(actualValue - self.ResultValMinValue, 0)
+            bucketNum = int(offset / self.ResultValBucketSize)
+            if (bucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
+                bucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
+            self.TrainNumItemsPerClass[bucketNum] += 1
         #####################
         elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
             intActualValue = max(int(actualValue), 0)
             intActualValue = min(int(actualValue), 1)
             self.TrainNumItemsPerClass[intActualValue] += 1
         #####################
-        elif (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            offset = max(actualValue - self.ResultValMinValue, 0)
-            bucketNum = int(offset / self.ResultValBucketSize)
-            if (bucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
-                bucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
-            self.TrainNumItemsPerClass[bucketNum] += 1
-
-
-        # Now, compute the divergence of each input from the mean.
-        for inputNum in range(self.numInputVars):
-            delta = inputVec[inputNum] - self.PreflightMeanInput[inputNum]
-            delta = delta * delta
-            self.InputDivergenceFromMeanTotal[inputNum] += delta
-        # End - for inputNum in range(self.numInputVars):
+        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
+            intActualValue = max(int(actualValue), 0)
+            intActualValue = min(int(actualValue), tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES - 1)
+            self.TrainNumItemsPerClass[intActualValue] += 1
     # End -  RecordTrainingSample
 
 
@@ -1595,42 +1693,12 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def FinishTrainingEpoch(self):
-        avgLoss = self.GetRunningAvgLossInCurrentEpoch()
+        if (self.NumTrainLossValuesCurrentEpoch > 0):
+            avgLoss = float(self.TotalTrainingLossInCurrentEpoch / float(self.NumTrainLossValuesCurrentEpoch))
+        else:
+            avgLoss = 0.0
+
         self.AvgLossPerEpochList.append(avgLoss)
-
-        # On finishing the first Epoch, we compute the StdDev
-        # Variance of given variable is the expected value of the squared difference between the 
-        # variable and its expected value
-        #    Var(x) = E(SUM(  ( x[i] - E(x) )**2   ))
-        #           = SUM(  ( x[i] - E(x) )**2   )  * P(x[i]-E(x))
-        #           = SUM(  ( x[i] - E(x) )**2   )  * 1/N)
-        #           = SUM(  ( x[i] - E(x) )**2   )  ) * 1/N
-        # 
-        # Standard deviation is the square root of variance
-        #    Std(x) = SQRT( E(SUM(  ( x[i] - E(x) )**2   )) )
-        #           ...
-        #           = SQRT( SUM(  ( x[i] - E(x) )**2   )  ) * 1/N )
-        # 
-        # But, expected Value is just the weighted average of all values, which is the mean
-        # if all values are the same
-        #    E(x) = SUM(x[i] * P(x[i]))
-        # If all values have the name probability and there are N possible values
-        #    E(x) = SUM(x[i] * 1/N)
-        #    E(x) = 1/N * SUM(x[i])
-        #    E(x) = mean
-        if (self.CurrentEpochNum == 0):
-            for inputNum in range(self.numInputVars):
-                try:
-                    self.InputStdDevList[inputNum] = self.InputDivergenceFromMeanTotal[inputNum] / self.NumSamplesTrainedPerEpoch
-                except Exception:
-                    print("Exception from FinishTrainingEpoch.")
-                    print("CurrentEpochNum = " + str(self.CurrentEpochNum))
-                    print("inputNum = " + str(inputNum))
-                    print("self.NumSamplesTrainedPerEpoch = " + str(self.NumSamplesTrainedPerEpoch))
-                    print("self.InputDivergenceFromMeanTotal[inputNum] = " + str(self.InputDivergenceFromMeanTotal[inputNum]))
-            # End - for inputNum in range(self.numInputVars):
-        # End - if (self.CurrentEpochNum == 0):
-
         self.CurrentEpochNum += 1
     # End -  FinishTrainingEpoch
 
@@ -1649,35 +1717,7 @@ class MLJob():
         # we do not write these to the file.
         self.InferResultInfo()
 
-        self.TestResults = {"NumCorrectPredictions": 0}
-        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            self.TestResults["NumPredictionsWithin2Percent"] = 0
-            self.TestResults["NumPredictionsWithin5Percent"] = 0
-            self.TestResults["NumPredictionsWithin10Percent"] = 0
-            self.TestResults["NumPredictionsWithin20Percent"] = 0
-            self.TestResults["NumPredictionsWithin50Percent"] = 0
-            self.TestResults["NumPredictionsWithin100Percent"] = 0
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            self.TestResults["NumPredictionsWithin1Class"] = 0
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            self.TestResults["NumPredictionsTruePositive"] = 0
-            self.TestResults["NumPredictionsTrueNegative"] = 0
-            self.TestResults["NumPredictionsFalsePositive"] = 0
-            self.TestResults["NumPredictionsFalseNegative"] = 0
-
-
-        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            self.NumResultClasses = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            self.NumResultClasses = tdf.TDF_NUM_FUTURE_EVENT_CATEGORIES
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            self.NumResultClasses = 2
-        else:
-            self.NumResultClasses = 1
-
-        self.TestNumItemsPerClass = [0] * self.NumResultClasses
-        self.TestNumPredictionsPerClass = [0] * self.NumResultClasses
-        self.TestNumCorrectPerClass = [0] * self.NumResultClasses
+        self.AllTestResults.StartTesting()
 
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_TESTING)
     # End - StartTesting
@@ -1692,113 +1732,9 @@ class MLJob():
     # This is a public procedure, it is called by the client.
     #####################################################
     def RecordTestingResult(self, actualValue, predictedValue):
-        fDebug = False
-        self.NumSamplesTested += 1
-
-        #########################
-        if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            difference = float(actualValue - predictedValue)
-            if (difference < 0):
-                difference = -difference
-
-            if (difference == 0):
-                self.TestResults["NumCorrectPredictions"] += 1
-            if (difference <= (actualValue * 0.02)):
-                self.TestResults["NumPredictionsWithin2Percent"] += 1
-            elif (difference <= (actualValue * 0.05)):
-                self.TestResults["NumPredictionsWithin5Percent"] += 1
-            elif (difference <= (actualValue * 0.1)):
-                self.TestResults["NumPredictionsWithin10Percent"] += 1
-            elif (difference <= (actualValue * 0.2)):
-                self.TestResults["NumPredictionsWithin20Percent"] += 1
-            elif (difference <= (actualValue * 0.5)):
-                self.TestResults["NumPredictionsWithin50Percent"] += 1
-            elif (difference <= (actualValue * 1.0)):
-                self.TestResults["NumPredictionsWithin100Percent"] += 1
-
-            offset = max(actualValue - self.ResultValMinValue, 0)
-            actualBucketNum = int(offset / self.ResultValBucketSize)
-            if (actualBucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
-                actualBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
-            self.TestNumItemsPerClass[actualBucketNum] += 1
-
-            # Check for extremes, since the prediction may be very huge or very small.
-            if (predictedValue >= self.ResultValMaxValue):
-                predictedBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
-            elif (predictedValue < self.ResultValMinValue):
-                predictedBucketNum = 0
-            else:
-                try:
-                    offset = max(predictedValue - self.ResultValMinValue, 0)
-                    predictedBucketNum = int(offset / self.ResultValBucketSize)
-                    if (predictedBucketNum >= ML_JOB_NUM_NUMERIC_VALUE_BUCKETS):
-                        predictedBucketNum = ML_JOB_NUM_NUMERIC_VALUE_BUCKETS - 1
-                except Exception:
-                    predictedBucketNum = 0
-            # End - else
-            self.TestNumPredictionsPerClass[predictedBucketNum] += 1
-            if (predictedBucketNum == actualBucketNum):
-                self.TestNumCorrectPerClass[actualBucketNum] += 1
-
-        #########################
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-            actualValueInt = int(actualValue)
-            predictedValueInt = int(predictedValue)
-            self.TestNumItemsPerClass[actualValueInt] += 1
-            self.TestNumPredictionsPerClass[predictedValue] += 1
-            if (actualValueInt == predictedValueInt):
-                self.TestResults["NumCorrectPredictions"] += 1
-                self.TestResults["NumPredictionsWithin1Class"] += 1
-                self.TestNumCorrectPerClass[int(actualValueInt)] += 1
-            else:  # if (actualValueInt != predictedValueInt):
-                if ((actualValueInt - 1) <= predictedValueInt <= (actualValueInt + 1)):
-                    self.TestResults["NumPredictionsWithin1Class"] += 1
-
-        #########################
-        elif (self.ResultValueType == tdf.TDF_DATA_TYPE_BOOL):
-            # If this is a Logistic, then convert the resulting probability into a 0 or 1
-            if (fDebug):
-                print("RecordTestingResult. Bool. actualValue=" + str(actualValue))
-                print("RecordTestingResult. Bool. predictedValue=" + str(predictedValue))
-                print("RecordTestingResult. Bool. self.IsLogisticNetwork=" + str(self.IsLogisticNetwork))
-                print("RecordTestingResult. Bool. self.OutputThreshold=" + str(self.OutputThreshold))
-
-            if ((self.IsLogisticNetwork) and (self.OutputThreshold > 0)):
-                predictedFloat = float(predictedValue)
-                if ((fDebug) and (predictedValue != 0)):
-                    print("Process a logistic result. predictedValue=" + str(predictedValue) + ", predictedFloat=" 
-                            + str(predictedFloat))
-                self.LogisticResultsTrueValueList.append(actualValue)
-                self.LogisticResultsPredictedProbabilityList.append(predictedFloat)
-
-                # Now, convert the probability to a normal boolean result like we would have for any bool.
-                if (predictedFloat >= self.OutputThreshold):
-                    predictedValue = 1
-                else:
-                    predictedValue = 0
-            # End - if ((self.IsLogisticNetwork) and (self.OutputThreshold > 0)):
-
-            actualValueInt = int(actualValue)
-            predictedValueInt = int(predictedValue)
-            if (fDebug):
-                print("RecordTestingResult.  actualValueInt = " + str(actualValueInt) 
-                        + ", predictedValueInt = " + str(predictedValueInt))
-
-            self.TestNumItemsPerClass[actualValueInt] += 1
-            self.TestNumPredictionsPerClass[predictedValueInt] += 1
-            if (actualValueInt == predictedValueInt):
-                self.TestResults["NumCorrectPredictions"] += 1
-                if (predictedValueInt > 0):
-                    self.TestResults["NumPredictionsTruePositive"] += 1
-                else:
-                    self.TestResults["NumPredictionsTrueNegative"] += 1
-                self.TestNumCorrectPerClass[int(actualValueInt)] += 1
-            else:  # if (actualValueInt != predictedValueInt):
-                if (predictedValueInt > 0):
-                    self.TestResults["NumPredictionsFalsePositive"] += 1
-                else:
-                    self.TestResults["NumPredictionsFalseNegative"] += 1
+        self.AllTestResults.RecordTestingResult(actualValue, predictedValue)
     # End -  RecordTestingResult
+
 
 
 
@@ -1826,97 +1762,6 @@ class MLJob():
 
     #####################################################
     #
-    # [MLJob::GetOutputThreshold]
-    #
-    #####################################################
-    def GetOutputThreshold(self):
-        if (not self.IsLogisticNetwork):
-            return(-1)
-
-        # The default is any probability over 50% is True. This is a coin-toss.
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.NetworkLayersXMLNode, 
-                                                        NETWORK_OUTPUT_THRESHOLD_ELEMENT_NAME, "0.5")
-        if ((resultStr is None) or (resultStr == "")):
-            return(-1)
-
-        try:
-            resultFloat = float(resultStr)
-        except Exception:
-            resultFloat = -1
-
-        #print("GetOutputThreshold. resultFloat=" + str(resultFloat))
-        return(resultFloat)
-    # End of GetOutputThreshold
-
-
-
-
-    #####################################################
-    # [MLJob::GetPreflightResults]
-    #####################################################
-    def GetPreflightResults(self):
-        inputVarNameListStr = self.GetNetworkInputVarNames()
-        inputVarArray = inputVarNameListStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
-
-        inputVarNameStemArray = ["" for x in range(self.numInputVars)]
-        inputTypeArray = [0 for x in range(self.numInputVars)]
-        for inputNum in range(self.numInputVars):
-            inputName = inputVarArray[inputNum]
-            _, nameStem, _, _ = tdf.TDF_ParseOneVariableName(inputName)
-            varType = tdf.TDF_GetVariableType(nameStem)
-
-            inputVarNameStemArray[inputNum] = nameStem
-            inputTypeArray[inputNum] = varType
-            #labMinVal, labMaxVal = tdf.TDF_GetMinMaxValuesForVariable(nameStem)
-        # End - for inputNum in range(self.numInputVars):
-
-        return self.numInputVars, inputVarNameStemArray, inputTypeArray, self.PreflightInputMins, self.PreflightInputMaxs, self.PreflightMeanInput
-    # End - GetPreflightResults
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::MakeStateFilePathname]
-    #
-    # Returns: Error code
-    #####################################################
-    def MakeStateFilePathname(self, newFileExtension):
-        fDebug = False
-
-        if (fDebug):
-            print("MakeStateFilePathname. self.JobFilePathName = " + self.JobFilePathName)
-            print("MakeStateFilePathname. self.OriginalFilePathname = " + self.OriginalFilePathname)
-
-        pathName = self.JobFilePathName
-
-        # When we pass a job back and forth in memory between processes, we 
-        # lose the original pathname from JobFilePathName
-        if ((pathName is None) or (pathName == "")):
-            pathName = self.OriginalFilePathname            
-
-        if ((pathName is None) or (pathName == "")):
-            print("ERROR! pathName is useless: " + str(pathName))
-            return ""
-
-        newDirName = os.path.dirname(pathName)
-        fileName = os.path.basename(pathName)
-
-        fileNameParts = os.path.splitext(fileName)
-        fileName = fileNameParts[0]
-        if (newFileExtension != ""):
-            fileName = fileName + "." + newFileExtension
-
-        newPathName = os.path.join(newDirName, fileName)
-        return newPathName
-    # End of MakeStateFilePathname
-
-
-
-
-    #####################################################
-    #
     # [MLJob::GetNamedStateAsStr
     # 
     # This is used by the different models to restore their 
@@ -1931,8 +1776,7 @@ class MLJob():
         if (stateStr is None):
             return defaultVal
 
-        stateStr = stateStr.lstrip()
-        stateStr = stateStr.rstrip()
+        stateStr = stateStr.lstrip().rstrip()
         return stateStr
     # End - GetNamedStateAsStr
 
@@ -1956,6 +1800,7 @@ class MLJob():
 
 
 
+
     #####################################################
     #
     # [MLJob::GetLinearUnitMatrices
@@ -1967,17 +1812,12 @@ class MLJob():
     #####################################################
     def GetLinearUnitMatrices(self, name):
         fDebug = False
-        if (fDebug):
-            print("MLJob::GetLinearUnitMatrices")
 
         linearUnitNode = dxml.XMLTools_GetChildNode(self.NeuralNetMatrixListXMLNode, name)
         if (linearUnitNode is None):
             if (fDebug):
                 print("MLJob::GetLinearUnitMatrices. Error. Linear Unit node is None")
             return False, None, None
-
-        #formatStr = dxml.XMLTools_GetAttribute(linearUnitNode, MLJOB_MATRIX_FORMAT_ATTRIBUTE_NAME)
-        #if ((formatStr is None) or (formatStr == "")): formatStr = MLJOB_MATRIX_FORMAT_SIMPLE
 
         weightXMLNode = dxml.XMLTools_GetChildNode(linearUnitNode, NETWORK_MATRIX_WEIGHT_MATRIX_NAME)
         biasXMLNode = dxml.XMLTools_GetChildNode(linearUnitNode, NETWORK_MATRIX_BIAS_VECTOR_NAME)
@@ -1986,20 +1826,19 @@ class MLJob():
                 print("MLJob::GetLinearUnitMatrices. Error. weightXMLNode is None")
             return False, None, None
 
-        weightStr = dxml.XMLTools_GetTextContents(weightXMLNode)
-        weightStr = weightStr.lstrip()
-        biasStr = dxml.XMLTools_GetTextContents(biasXMLNode)
-        biasStr = biasStr.lstrip()
-        #print("GetLinearUnitMatrices. weightStr=" + weightStr)
-        #print("GetLinearUnitMatrices. biasStr=" + biasStr)
+        weightStr = dxml.XMLTools_GetTextContents(weightXMLNode).lstrip().rstrip()
+        biasStr = dxml.XMLTools_GetTextContents(biasXMLNode).lstrip().rstrip()
 
         weightMatrix = self.MLJob_ConvertStringTo2DMatrix(weightStr)
         biasMatrix = MLJob_ConvertStringTo1DVector(biasStr)
 
         if (fDebug):
-            #print("GetLinearUnitMatrices. weightMatrix=" + str(weightMatrix))
-            #print("GetLinearUnitMatrices. biasMatrix=" + str(biasMatrix))
-            pass
+            print("GetLinearUnitMatrices. name=" + name)
+            print("   WeightChecksum=" + str(self.ComputeArrayChecksum(weightMatrix)))
+            print("   weightStr=" + str(weightStr))
+            print("   weightMatrix=" + str(weightMatrix))
+            print("   biasStr=" + str(biasStr))
+            print("   biasChecksum=" + str(self.ComputeArrayChecksum(biasMatrix)))
 
         return True, weightMatrix, biasMatrix
     # End - GetLinearUnitMatrices
@@ -2014,24 +1853,25 @@ class MLJob():
     #####################################################
     def SetLinearUnitMatrices(self, name, weightMatrix, biasMatrix):
         fDebug = False
-        if (fDebug):
-            print("MLJob::SetLinearUnitMatrices")
 
         linearUnitNode = dxml.XMLTools_GetOrCreateChildNode(self.NeuralNetMatrixListXMLNode, name)
         if (linearUnitNode is None):
             return
-
         weightXMLNode = dxml.XMLTools_GetOrCreateChildNode(linearUnitNode, NETWORK_MATRIX_WEIGHT_MATRIX_NAME)
         biasXMLNode = dxml.XMLTools_GetOrCreateChildNode(linearUnitNode, NETWORK_MATRIX_BIAS_VECTOR_NAME)
         if ((weightXMLNode is None) or (biasXMLNode is None)):
             return
 
-        if (fDebug):
-            print("MLJob::SetLinearUnitMatrices - setting the values")
-
         weightStr = self.MLJob_Convert2DMatrixToString(weightMatrix)
         biasStr = MLJob_Convert1DVectorToString(biasMatrix)
-    
+        if (fDebug):
+            print("MLJob::SetLinearUnitMatrices Name=" + name)
+            print("   WeightChecksum=" + str(self.ComputeArrayChecksum(weightMatrix)))
+            print("   weightStr=" + str(weightStr))
+            print("   weightMatrix=" + str(weightMatrix))
+            print("   biasStr=" + str(biasStr))
+            print("   biasChecksum=" + str(self.ComputeArrayChecksum(biasMatrix)))
+
         dxml.XMLTools_SetTextContents(biasXMLNode, biasStr)
         dxml.XMLTools_SetTextContents(weightXMLNode, weightStr)
     # End - SetLinearUnitMatrices
@@ -2063,120 +1903,6 @@ class MLJob():
         return(resultString)
     # End - MLJob_Convert2DMatrixToString
 
-
-
-    ################################################################################
-    #
-    # [MLJob_Convert3DMatrixToString]
-    #
-    # inputArray is a numpy array.
-    ################################################################################
-    def MLJob_Convert3DMatrixToString(self, inputArray):
-        dim1 = len(inputArray)
-        if (dim1 > 0):
-            dim2 = len(inputArray[0])
-        else:
-            dim2 = 0
-        if (dim2 > 0):
-            dim3 = len(inputArray[0][0])
-        else:
-            dim3 = 0
-
-        resultString = "NumD=3;D=" + str(dim1) + VALUE_SEPARATOR_CHAR + str(dim2) + VALUE_SEPARATOR_CHAR + str(dim3) + ";T=float;" + ROW_SEPARATOR_CHAR
-        for index1 in range(dim1):
-            matrix2d = inputArray[index1]
-            for index2 in range(dim2):
-                row = matrix2d[index2]
-                for numVal in row:
-                    resultString = resultString + str(numVal) + VALUE_SEPARATOR_CHAR
-                resultString = resultString[:-1]
-                resultString = resultString + ROW_SEPARATOR_CHAR
-            # End - for index2 in range(dim2):
-        # End - for index1 in range(dim1):
-
-        return(resultString)
-    # End - MLJob_Convert3DMatrixToString
-
-
-
-
-
-    ################################################################################
-    #
-    # [MLJob_ConvertStringTo3DMatrix]
-    #
-    ################################################################################
-    def MLJob_ConvertStringTo3DMatrix(self, matrixStr):
-        # Read the dimension property
-        sectionList = matrixStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
-        dimensionStr = ""
-        for propertyStr in sectionList:
-            propertyParts = propertyStr.split("=")
-            if (len(propertyParts) < 2):
-                continue
-
-            propName = propertyParts[0]
-            propValue = propertyParts[1]
-            if (propName == "D"):
-                dimensionStr = propValue
-        # End - for propertyStr in sectionList:
-
-        # Parse the dimension property.
-        dim1 = 0
-        dim2 = 0
-        dim3 = 0
-        if (dimensionStr != ""):
-            dimensionList = dimensionStr.split(VALUE_SEPARATOR_CHAR)
-            if (len(dimensionList) == 3):
-                dim1 = int(dimensionList[0])
-                dim2 = int(dimensionList[1])
-                dim3 = int(dimensionList[2])
-            else:
-                print("\n\nERROR! MLJob_ConvertStringTo3DMatrix. Invalid dimension for a matrixStr. dimensionStr=[" + dimensionStr + "]")
-                sys.exit(0)
-        # End - if (dimensionStr != ""):
-
-        # Make an empty matrix which will be filled below.
-        newMatrix = numpy.empty([dim1, dim2, dim3])
-
-        # Read each 1-D vector and put it in the next place of the result matrix
-        matrixAllRowsStr = sectionList[len(sectionList) - 1]
-        matrixRowStrList = matrixAllRowsStr.split(ROW_SEPARATOR_CHAR)
-        index1 = 0    
-        index2 = 0    
-        for singleRowStr in matrixRowStrList:
-            if (singleRowStr != ""):
-                # Place a vector into the current spot of the result matrix
-                valueList = singleRowStr.split(VALUE_SEPARATOR_CHAR)
-                index3 = 0
-                for value in valueList:
-                    if (index3 >= dim3):
-                        print("\n\nERROR! MLJob_ConvertStringTo3DMatrix. Overran a matrix. dimensionStr=[" + dimensionStr + "]")
-                        sys.exit(0)
-                    newMatrix[index1][index2][index3] = float(value)
-                    index3 += 1
-                # End - for value in valueList:
-
-                # We should have filled it completely, and will stop at the end of the matrix
-                if (index3 != dim3):
-                    print("\n\nERROR! MLJob_ConvertStringTo3DMatrix. Underfilled a row in the matrix. dimensionStr=[" + dimensionStr + "]")
-                    sys.exit(0)
-
-                # Advance the position where we will next fill the result matrix
-                index2 += 1
-                if (index2 >= dim2):
-                    index1 += 1
-                    index2 = 0
-            # End - if (singleRowStr != ""):
-        # End - for singleRowStr in matrixRowStrList:
-
-        # We should have filled it completely, and will stop at the end of the matrix
-        if (index1 != dim1):
-            print("\n\nERROR! MLJob_ConvertStringTo3DMatrix. Underfilled the entire matrix. dimensionStr=[" + dimensionStr + "]")
-            sys.exit(0)
-
-        return(newMatrix)
-    # End - MLJob_ConvertStringTo3DMatrix
 
 
 
@@ -2217,7 +1943,7 @@ class MLJob():
         # Make an empty matrix which will be filled below.
         newMatrix = numpy.empty([numRows, numCols])
 
-        # Read each 1-D vector and put it in the next place of the result matrix
+        # Read each 1-D vector and put it in the next position inside the result matrix
         matrixAllRowsStr = sectionList[len(sectionList) - 1]
         matrixRowStrList = matrixAllRowsStr.split(ROW_SEPARATOR_CHAR)
         rowNum = 0    
@@ -2264,92 +1990,58 @@ class MLJob():
     #####################################################
     def ReadPreflightResultsFromXML(self, parentXMLNode):
         self.NumResultsInPreflight = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
-                                                        RESULTS_NUM_ITEMS_ELEMENT_NAME, 0)
+                                                        RESULTS_PREFLIGHT_NUM_ITEMS_ELEMENT_NAME, 0)
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, "")
+                                                        RESULTS_PREFLIGHT_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, "")
         self.PreflightNumItemsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_MINS_ELEMENT_NAME, "")
+                                                        RESULTS_PREFLIGHT_INPUT_MINS_ELEMENT_NAME, "")
         self.PreflightInputMins = MLJob_ConvertStringTo1DVector(resultStr)
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_MAXS_ELEMENT_NAME, "")
+                                                        RESULTS_PREFLIGHT_INPUT_MAXS_ELEMENT_NAME, "")
         self.PreflightInputMaxs = MLJob_ConvertStringTo1DVector(resultStr)
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_TOTALS_ELEMENT_NAME, "")
-        self.PreflightInputSums = MLJob_ConvertStringTo1DVector(resultStr)
+                                                        RESULTS_PREFLIGHT_INPUT_RANGES_ELEMENT_NAME, "")
+        self.PreflightInputRanges = MLJob_ConvertStringTo1DVector(resultStr)
 
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_MEANS_ELEMENT_NAME, "")
-        self.PreflightMeanInput = MLJob_ConvertStringTo1DVector(resultStr)
 
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_DIVERGENCE_FROM_MEAN_TOTALS_ELEMENT_NAME, "")
-        self.InputDivergenceFromMeanTotal = MLJob_ConvertStringTo1DVector(resultStr)
 
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_STD_DEV_ELEMENT_NAME, "")
-        self.InputStdDevList = MLJob_ConvertStringTo1DVector(resultStr)
+        ################################
+        # Find the existing list of class weights
+        classWeightsListXMLNode = dxml.XMLTools_GetChildNode(self.ResultsPreflightXMLNode, RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
+        if (classWeightsListXMLNode is None):
+            return
 
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_INPUT_SUMS_FOR_EACH_CLASS_ELEMENT_NAME, "")
-        self.PreflightInputSumsPerClass = self.MLJob_ConvertStringTo2DMatrix(resultStr)
+        # Get the number of classes so we can easily rebuild the data structures when reading the job.
+        retrievedNumClasses = dxml.XMLTools_GetChildNodeTextAsInt(classWeightsListXMLNode, 
+                                                                  RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES, -1)
+        #if (retrievedNumClasses != self.NumResultClasses):
 
-        self.PreflightCentroidType = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_CENTROID_TYPE, MLJOB_CENTROID_TYPE_FIXED)
+        # Make a new runtime object for each resultClass element
+        self.PreflightResultClassWeights = [0] * self.NumResultClasses
 
-        self.PreflightNumCentroids = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_NUM_CENTROIDS, -1)
+        # Read each resultClass
+        resultClassXMLNode = dxml.XMLTools_GetChildNode(classWeightsListXMLNode, 
+                                                        RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
+        while (resultClassXMLNode is not None):
+            resultClassID = dxml.XMLTools_GetChildNodeTextAsInt(resultClassXMLNode, 
+                                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, -1)
+            classWeight = dxml.XMLTools_GetChildNodeTextAsFloat(resultClassXMLNode, 
+                                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE, -1)
+            if ((resultClassID >= 0) and (classWeight >= 0)):
+                self.PreflightResultClassWeights[resultClassID] = classWeight
+        
+            resultClassXMLNode = dxml.XMLTools_GetPeerNode(resultClassXMLNode, 
+                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
+        # End - while (resultClassXMLNode is not None):
 
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_VALUES, "")
-        self.PreflightGlobalCentroidInputVals = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_TOTALS, "")
-        self.PreflightGlobalCentroidInputTotals = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_MEANS, "")
-        self.PreflightGlobalCentroidInputMeans = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_RESULT_CLASSES, "")
-        self.PreflightGlobalCentroidResultClassNums = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_NUM_SATELLITES, "")
-        self.PreflightGlobalCentroidNumChildren = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_GLOBAL_CENTROID_MAX_DISTANCE, "")
-        self.PreflightGlobalCentroidMaxDistance = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS, "")
-        self.PreflightResultClassCentroidInputVals = self.MLJob_ConvertStringTo3DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_TOTALS, "")
-        self.PreflightResultClassCentroidInputTotals = self.MLJob_ConvertStringTo3DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_INPUT_MEANS, "")
-        self.PreflightResultClassCentroidInputMean = self.MLJob_ConvertStringTo3DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS_NUM_SATS, "")
-        self.PreflightResultClassCentroidNumChildren = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, 
-                                                        RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_MAX_DISTANCE, "")
-        self.PreflightResultClassCentroidPerMaxDistance = self.MLJob_ConvertStringTo2DMatrix(resultStr)
-
-        self.ReadResultClassWeightsFromXML()
+        self.FinishPreflight()
     # End - ReadPreflightResultsFromXML
+
 
 
 
@@ -2361,177 +2053,51 @@ class MLJob():
     #####################################################
     def WritePreflightResultsToXML(self, parentXMLNode):
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_NUM_ITEMS_ELEMENT_NAME, str(self.NumResultsInPreflight))
+                                    RESULTS_PREFLIGHT_NUM_ITEMS_ELEMENT_NAME, str(self.NumResultsInPreflight))
 
         resultStr = MLJob_Convert1DVectorToString(self.PreflightNumItemsPerClass)
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, resultStr)
+                                    RESULTS_PREFLIGHT_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, resultStr)
 
         resultStr = MLJob_Convert1DVectorToString(self.PreflightInputMins)
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_MINS_ELEMENT_NAME, resultStr)
+                                    RESULTS_PREFLIGHT_INPUT_MINS_ELEMENT_NAME, resultStr)
 
         resultStr = MLJob_Convert1DVectorToString(self.PreflightInputMaxs)
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_MAXS_ELEMENT_NAME, resultStr)
+                                    RESULTS_PREFLIGHT_INPUT_MAXS_ELEMENT_NAME, resultStr)
 
-        resultStr = MLJob_Convert1DVectorToString(self.PreflightInputSums)
+        resultStr = MLJob_Convert1DVectorToString(self.PreflightInputRanges)
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_TOTALS_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.PreflightMeanInput)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_MEANS_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.InputDivergenceFromMeanTotal)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_DIVERGENCE_FROM_MEAN_TOTALS_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.InputStdDevList)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_STD_DEV_ELEMENT_NAME, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightInputSumsPerClass)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_INPUT_SUMS_FOR_EACH_CLASS_ELEMENT_NAME, resultStr)
-
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_CENTROID_TYPE, self.PreflightCentroidType)
-
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_NUM_CENTROIDS, str(self.PreflightNumCentroids))
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightGlobalCentroidInputVals)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_VALUES, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightGlobalCentroidInputTotals)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_TOTALS, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightGlobalCentroidInputMeans)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_INPUT_MEANS, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightGlobalCentroidResultClassNums)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_RESULT_CLASSES, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.PreflightGlobalCentroidNumChildren)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_NUM_SATELLITES, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.PreflightGlobalCentroidMaxDistance)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_GLOBAL_CENTROID_MAX_DISTANCE, resultStr)
-
-        resultStr = self.MLJob_Convert3DMatrixToString(self.PreflightResultClassCentroidInputVals)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS, resultStr)
-
-        resultStr = self.MLJob_Convert3DMatrixToString(self.PreflightResultClassCentroidInputTotals)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_TOTALS, resultStr)
-
-        resultStr = self.MLJob_Convert3DMatrixToString(self.PreflightResultClassCentroidInputMean)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_INPUT_MEANS, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightResultClassCentroidNumChildren)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_VALS_NUM_SATS, resultStr)
-
-        resultStr = self.MLJob_Convert2DMatrixToString(self.PreflightResultClassCentroidPerMaxDistance)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
-                                    RESULTS_PREFLIGHT_RESULT_CLASS_CENTROIDS_MAX_DISTANCE, resultStr)
-
-        self.WriteResultClassWeightsToXML()
-    # End - WritePreflightResultsToXML
+                                    RESULTS_PREFLIGHT_INPUT_RANGES_ELEMENT_NAME, resultStr)
 
 
 
-
-    #####################################################
-    #
-    # [MLJob::ReadResultClassWeightsFromXML
-    # 
-    #####################################################
-    def ReadResultClassWeightsFromXML(self):
-        fDebug = False
-        if (fDebug):
-            print("ReadResultClassWeightsFromXML")
-
-        # Find the existing list of class weights
-        classWeightsListXMLNode = dxml.XMLTools_GetChildNode(self.ResultsPreflightXMLNode, RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_LIST)
-        if (classWeightsListXMLNode is None):
-            return
-
-        # Get the number of classes so we can easily rebuild the data structures when reading the job.
-        self.NumResultClasses = dxml.XMLTools_GetChildNodeTextAsInt(classWeightsListXMLNode, 
-                                                                    RESULTS_PREFLIGHT_NUM_RESULT_CLASSES, -1)
-
-        # Make a new runtime object for each resultClass element
-        self.PreflightResultClassDict = {}
-        self.PreflightResultClassWeights = [0] * self.NumResultClasses
-
-        # Read each resultClass
-        resultClassXMLNode = dxml.XMLTools_GetChildNode(classWeightsListXMLNode, RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT)
-        while (resultClassXMLNode is not None):
-            resultClassID = dxml.XMLTools_GetChildNodeTextAsInt(resultClassXMLNode, 
-                                                                RESULTS_PREFLIGHT_RESULT_CLASS_ID, -1)
-            classWeight = dxml.XMLTools_GetChildNodeTextAsFloat(resultClassXMLNode, 
-                                                                RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_VALUE, -1)
-
-            if ((resultClassID >= 0) and (classWeight >= 0)):
-                self.PreflightResultClassWeights[resultClassID] = classWeight
-
-                newResultClassInfo = {'weight': classWeight}
-                self.PreflightResultClassDict[resultClassID] = newResultClassInfo
-            # End - if ((resultClassID >= 0) and (resultClassID >= 0)):
-        
-            resultClassXMLNode = dxml.XMLTools_GetPeerNode(resultClassXMLNode, 
-                                                            RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT)
-        # End - while (resultClassXMLNode is not None):
-
-        if (fDebug):
-            print("ReadResultClassWeightsFromXML: self.PreflightResultClassWeights = " + str(self.PreflightResultClassWeights))
-    # End - ReadResultClassWeightsFromXML
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::WriteResultClassWeightsToXML
-    # 
-    #####################################################
-    def WriteResultClassWeightsToXML(self):
-        # Make an empty list of resultClass weights
+        #############################
+        # Write the derived training weights
         classWeightsListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsPreflightXMLNode, 
-                                                                    RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_LIST)
+                                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
         if (classWeightsListXMLNode is None):
             return
         dxml.XMLTools_RemoveAllChildNodes(classWeightsListXMLNode)
 
         # Save the number of classes so we can easily rebuild the data structures when reading the job.
         dxml.XMLTools_AddChildNodeWithText(classWeightsListXMLNode, 
-                                            RESULTS_PREFLIGHT_NUM_RESULT_CLASSES, 
+                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES, 
                                             str(self.NumResultClasses))
 
         # Make a new element for each resultClass weight
-        for _, (resultClassID, resultClassInfo) in enumerate(self.PreflightResultClassDict.items()):
+        for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights):
             resultClassXMLNode = dxml.XMLTools_AppendNewChildNode(classWeightsListXMLNode, 
-                                                            RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT)
-
-            classWeight = resultClassInfo['weight']
+                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
             dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
-                                                RESULTS_PREFLIGHT_RESULT_CLASS_WEIGHT_VALUE, 
+                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE, 
                                                 str(classWeight))
             dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
-                                                RESULTS_PREFLIGHT_RESULT_CLASS_ID, 
+                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, 
                                                 str(resultClassID))
-        # End - for _, (resultClassID, resultClassInfo) in enumerate(self.PreflightResultClassDict.items()):
-    # End - WriteResultClassWeightsToXML
+        # End - for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights.items())
+    # End - WritePreflightResultsToXML
 
 
 
@@ -2539,10 +2105,10 @@ class MLJob():
 
     #####################################################
     #
-    # [MLJob::ReadTrainResultsFromXML
+    # [MLJob::ReadTraingResultsFromXML
     # 
     #####################################################
-    def ReadTrainResultsFromXML(self, parentXMLNode):
+    def ReadTraingResultsFromXML(self, parentXMLNode):
         ###################
         self.NumSamplesTrainedPerEpoch = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
                                                             "NumSequencesTrainedPerEpoch", 0)
@@ -2568,13 +2134,7 @@ class MLJob():
         #################
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, "TrainNumItemsPerClass", "")
         self.TrainNumItemsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, RESULTS_TRAINING_TOTAL_DEV_ELEMENT_NAME, "")
-        self.TrainingTotalDevInputVar = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, RESULTS_TRAINING_STANDARD_DEV_ELEMENT_NAME, "")
-        self.TrainingStdDevInputVar = MLJob_ConvertStringTo1DVector(resultStr)
-    # End - ReadTrainResultsFromXML
+    # End - ReadTraingResultsFromXML
 
 
 
@@ -2607,12 +2167,6 @@ class MLJob():
         ###################
         resultStr = MLJob_Convert1DVectorToString(self.TrainNumItemsPerClass)
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "TrainNumItemsPerClass", resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.TrainingTotalDevInputVar)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_TRAINING_TOTAL_DEV_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.TrainingStdDevInputVar)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_TRAINING_STANDARD_DEV_ELEMENT_NAME, resultStr)
     # End - WriteTrainResultsToXML
 
 
@@ -2625,75 +2179,7 @@ class MLJob():
     # 
     #####################################################
     def ReadTestResultsFromXML(self, parentXMLNode):
-        # Every simple value (like <aa>5</aa>) is a named value in the result dict.
-        self.TestResults = {}
-        currentXMLNode = dxml.XMLTools_GetFirstChildNode(parentXMLNode)
-        while (currentXMLNode is not None):
-            if (dxml.XMLTools_IsLeafNode(currentXMLNode)):
-                nameStr = dxml.XMLTools_GetElementName(currentXMLNode)
-                valueStr = dxml.XMLTools_GetTextContents(currentXMLNode)
-                #print("ReadGenericResultsFromXML. nameStr=" + nameStr + ", valueStr=" + valueStr)
-                try:
-                    self.TestResults[nameStr] = int(valueStr)
-                except Exception:
-                    self.TestResults[nameStr] = valueStr
-            # End - if (dxml.XMLTools_IsLeafNode(currentXMLNode)):
-
-            currentXMLNode = dxml.XMLTools_GetAnyPeerNode(currentXMLNode)
-        # End - while (currentXMLNode is not None):
-
-
-        self.NumSamplesTested = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
-                                                    RESULTS_NUM_ITEMS_ELEMENT_NAME, 0)
-        self.ROCAUC = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, 
-                                                    RESULTS_ROCAUC_ELEMENT_NAME, 0)
-        #print(">>> XMLTools_GetChildNodeTextAsFloat. self.ROCAUC = " + str(self.ROCAUC) + ", PathName=" + self.JobFilePathName)
-
-        self.AUPRC = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
-                                                    RESULTS_AUPRC_ELEMENT_NAME, 0)
-        self.F1Score = dxml.XMLTools_GetChildNodeTextAsInt(parentXMLNode, 
-                                                    RESULTS_F1Score_ELEMENT_NAME, 0)
-
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, RESULTS_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, "")
-        self.TestNumItemsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, RESULTS_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME, "")
-        self.TestNumPredictionsPerClass = MLJob_ConvertStringTo1DVector(resultStr)
-
-        resultStr = dxml.XMLTools_GetChildNodeTextAsStr(parentXMLNode, RESULTS_NUM_CORRECT_PER_CLASS_ELEMENT_NAME, "")
-        self.TestNumCorrectPerClass = MLJob_ConvertStringTo1DVector(resultStr)
-
-        self.OutputThreshold = self.GetOutputThreshold()
-        self.LogisticResultsTrueValueList = []
-        self.LogisticResultsPredictedProbabilityList = []
-        if (self.IsLogisticNetwork):
-            resultStr = dxml.XMLTools_GetChildNodeText(parentXMLNode, RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME)
-            if ((resultStr is not None) and (resultStr != "")):
-                resultArray = resultStr.split(MLJOB_NAMEVAL_SEPARATOR_CHAR)
-                for truthProbabilityPair in resultArray:
-                    valuePair = truthProbabilityPair.split("=")
-                    if (len(valuePair) == 2):
-                        try:
-                            trueValue = round(float(valuePair[0]))
-                            probability = float(valuePair[1])
-                        except Exception:
-                            print("ReadTestResultsFromXML. EXCEPTION in reading Logistic results")
-                            continue
-
-                        #if (probability > 0): 
-                        #print("Read Logistic Input. probability=" + str(probability) + ", trueValue=" + str(trueValue))
-
-                        self.LogisticResultsTrueValueList.append(trueValue)
-                        self.LogisticResultsPredictedProbabilityList.append(probability)
-                # End - for truthProbabilityPair in resultArray:
-            # End - if ((resultStr not None) and (resultStr != "")):
-
-            self.ROCAUC = -1
-            if ((len(self.LogisticResultsTrueValueList) > 0) and (len(self.LogisticResultsPredictedProbabilityList) > 0)):
-                self.ROCAUC = roc_auc_score(self.LogisticResultsTrueValueList, 
-                                            self.LogisticResultsPredictedProbabilityList)
-        # End - if (self.IsLogisticNetwork):
+        self.AllTestResults.ReadTestResultsFromXML()
     # End - ReadTestResultsFromXML
 
 
@@ -2706,62 +2192,11 @@ class MLJob():
     # 
     #####################################################
     def WriteTestResultsToXML(self, parentXMLNode):
-        for index, (valName, value) in enumerate(self.TestResults.items()):
-            dxml.XMLTools_AddChildNodeWithText(parentXMLNode, valName, str(value))
-
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_NUM_ITEMS_ELEMENT_NAME, 
-                                                        str(self.NumSamplesTested))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_ROCAUC_ELEMENT_NAME, str(self.ROCAUC))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_AUPRC_ELEMENT_NAME, str(self.AUPRC))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_F1Score_ELEMENT_NAME, str(self.F1Score))
-
-        resultStr = MLJob_Convert1DVectorToString(self.TestNumItemsPerClass)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_NUM_ITEMS_PER_CLASS_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.TestNumPredictionsPerClass)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME, resultStr)
-
-        resultStr = MLJob_Convert1DVectorToString(self.TestNumCorrectPerClass)
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_NUM_CORRECT_PER_CLASS_ELEMENT_NAME, resultStr)
-
-
-        # This saves the values for Logistic function outputs
-        # These are used to compute AUROC and AUPRC
-        if (self.IsLogisticNetwork):
-            logisticOutputsStr = ""
-            listLength = len(self.LogisticResultsTrueValueList)
-            for index in range(listLength):
-                trueValue = self.LogisticResultsTrueValueList[index]
-                probability = self.LogisticResultsPredictedProbabilityList[index]
-                logisticOutputsStr = logisticOutputsStr + str(trueValue) + "=" + str(probability) + MLJOB_NAMEVAL_SEPARATOR_CHAR
-            if (logisticOutputsStr != ""):
-                logisticOutputsStr = logisticOutputsStr[:-1]
-                dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RESULTS_NUM_LOGISTIC_OUTPUTS_ELEMENT_NAME, logisticOutputsStr)
-        # End - if (self.IsLogisticNetwork):
+        self.AllTestResults.WriteTestResultsToXML()
     # End - WriteTestResultsToXML
 
 
 
-
-
-    #####################################################
-    # [MLJob::GetRunningAvgLossInCurrentEpoch
-    #####################################################
-    def GetRunningAvgLossInCurrentEpoch(self):
-        if (self.NumTrainLossValuesCurrentEpoch > 0):
-            avgLoss = float(self.TotalTrainingLossInCurrentEpoch / float(self.NumTrainLossValuesCurrentEpoch))
-        else:
-            avgLoss = 0.0
-        return avgLoss
-    # End - GetRunningAvgLossInCurrentEpoch
-
-
-
-    #####################################################
-    # [MLJob::SetJobFilePathName]
-    #####################################################
-    def SetJobFilePathName(self, name):
-        self.JobFilePathName = name
 
 
     #####################################################
@@ -2772,23 +2207,6 @@ class MLJob():
         dxml.XMLTools_SetChildNodeTextAsBool(self.JobControlXMLNode, "Debug", fDebug)
     # End - SetDebug
 
-
-    #####################################################
-    # [MLJob::RecordDebugEvent]
-    #####################################################
-    def RecordDebugEvent(self, name):
-        if (self.Debug):
-            self.DebugEvents.AddEvent(name)
-    # End - RecordDebugEvent
-
-
-    #####################################################
-    # [MLJob::RecordDebugVal]
-    #####################################################
-    def RecordDebugVal(self, name, value):
-        if (self.Debug):
-            self.DebugEvents.AddValue(name, value)
-    # End - RecordDebugVal
 
 
     ################################################################################
@@ -2864,23 +2282,6 @@ class MLJob():
 
 
 
-    #####################################################
-    # [MLJob::DrawDebugTimeline]
-    #####################################################
-    def DrawDebugTimeline(self, titleStr, eventNameList, filePath):
-        # , DEBUG_EVENT_TIMELINE_CHUNK: "yellow"
-        vertLineDict = {DEBUG_EVENT_TIMELINE_EPOCH: "red"}
-
-        self.DebugEvents.DrawTimeline(titleStr, 
-                                "",  # xLabelStr,
-                                "",  # yLabelStr,
-                                eventNameList, 
-                                vertLineDict,
-                                filePath)
-    # End - DrawDebugTimeline
-
-
-
 
     #####################################################
     #
@@ -2902,8 +2303,7 @@ class MLJob():
             return("")
         return(resultStr)
     # End of GetNetworkType
-
-
+            
 
 
     #####################################################
@@ -2923,12 +2323,6 @@ class MLJob():
 
 
     #####################################################
-    # [MLJob::SetTrainingParamNumber]
-    #####################################################
-    def SetTrainingParamNumber(self, valName, newValue):
-        dxml.XMLTools_SetChildNodeWithNumber(self.TrainingXMLNode, valName, newValue)
-
-    #####################################################
     # [MLJob::GetTrainingParamStr]
     #####################################################
     def GetTrainingParamStr(self, valName, defaultVal):
@@ -2942,6 +2336,20 @@ class MLJob():
     #####################################################
     def GetTrainingParamInt(self, valName, defaultVal):
         return(dxml.XMLTools_GetChildNodeTextAsInt(self.TrainingXMLNode, valName, defaultVal))
+
+    #####################################################
+    # [MLJob::GetRunOptionsStr]
+    #####################################################
+    def GetRunOptionsStr(self):
+        return self.GetJobControlStr(JOBCTL_RUN_OPTIONS_ELEMENT_NAME, "")
+
+    #####################################################
+    # [MLJob::IsRunOptionSet]
+    #####################################################
+    def IsRunOptionSet(self, optionName):
+        optionStr = self.GetJobControlStr(JOBCTL_RUN_OPTIONS_ELEMENT_NAME, "")
+        optionList = optionStr.split(JOBCTL_RUN_OPTION_SEPARATOR_STR) 
+        return (optionName in optionList)
 
     #####################################################
     # [MLJob::GetNetworkLayerSpec]
@@ -3031,7 +2439,7 @@ class MLJob():
     # [MLJob::GetNumSequencesTested
     #####################################################
     def GetNumSequencesTested(self):
-        return(self.NumSamplesTested)
+        return(self.AllTestResults.NumSamplesTested)
 
     #####################################################
     # [MLJob::GetAvgLossPerEpochList
@@ -3061,44 +2469,43 @@ class MLJob():
     # [MLJob::GetTestResults
     #####################################################
     def GetTestResults(self):
-        return self.TestResults
+        return self.AllTestResults.TestResults
 
     #####################################################
     # [MLJob::GetTestNumItemsPerClass
     #####################################################
     def GetTestNumItemsPerClass(self):
-        return self.TestNumItemsPerClass
+        return self.AllTestResults.TestNumItemsPerClass
 
     #####################################################
     # [MLJob::GetROCAUC
     #####################################################
     def GetROCAUC(self):
-        #print(">>> GetROCAUC(). self.ROCAUC = " + str(self.ROCAUC) + ", PathName=" + self.JobFilePathName)
-        return self.ROCAUC
+        return self.AllTestResults.ROCAUC
 
     #####################################################
     # [MLJob::GetAUPRC
     #####################################################
     def GetAUPRC(self):
-        return self.AUPRC
+        return self.AllTestResults.AUPRC
 
     #####################################################
     # [MLJob::GetF1Score
     #####################################################
     def GetF1Score(self):
-        return self.F1Score
+        return self.AllTestResults.F1Score
 
     #####################################################
     # [MLJob::GetTestNumCorrectPerClass
     #####################################################
     def GetTestNumCorrectPerClass(self):
-        return self.TestNumCorrectPerClass
+        return self.AllTestResults.TestNumCorrectPerClass
 
     #####################################################
     # [MLJob::GetTestNumPredictionsPerClass
     #####################################################
     def GetTestNumPredictionsPerClass(self):
-        return self.TestNumPredictionsPerClass
+        return self.AllTestResults.TestNumPredictionsPerClass
 
     #####################################################
     # [MLJob::GetStartRequestTimeStr]
@@ -3116,13 +2523,13 @@ class MLJob():
     # [MLJob::GetLogisticResultsTrueValueList]
     #####################################################
     def GetLogisticResultsTrueValueList(self):
-        return(self.LogisticResultsTrueValueList)
+        return self.AllTestResults.LogisticResultsTrueValueList
 
     #####################################################
     # [MLJob::GetLogisticResultsPredictedProbabilityList]
     #####################################################
     def GetLogisticResultsPredictedProbabilityList(self):
-        return(self.LogisticResultsPredictedProbabilityList)
+        return self.AllTestResults.LogisticResultsPredictedProbabilityList
 
 
     #####################################################
@@ -3209,57 +2616,6 @@ class MLJob():
 
 
 
-
-    #####################################################
-    #
-    # [MLJob::SetNetworkInputVarNames]
-    #
-    #####################################################
-    def SetNetworkInputVarNames(self, newVal):
-        inputLayerXMLNode = dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, "InputLayer")
-        if (inputLayerXMLNode is None):
-            return
-
-        dxml.XMLTools_AddChildNodeWithText(inputLayerXMLNode, "InputValues", newVal)
-    # End of SetNetworkInputVarNames
-
-
-
-    #####################################################
-    #
-    # [MLJob::SetNetworkOutputVarName]
-    #
-    #####################################################
-    def SetNetworkOutputVarName(self, newVal):
-        dxml.XMLTools_AddChildNodeWithText(self.NetworkLayersXMLNode, "ResultValue", newVal)
-    # End of SetNetworkOutputVarName
-
-
-
-    #####################################################
-    #
-    # [MLJob::SetLogFilePathname
-    # 
-    #####################################################
-    def SetLogFilePathname(self, newPathName, addDateSuffix):
-        if (addDateSuffix):
-            now = datetime.now()
-            timeStr = now.strftime("%Y-%m-%d_%H_%M")
-            newPathName = newPathName + timeStr + ".txt"
-            #print("SetLogFilePathname. Revised - newPathName=" + newPathName)
-        # End - if (addDateSuffix)
-
-        self.LogFilePathname = newPathName
-
-        xmlNode = dxml.XMLTools_GetOrCreateChildNode(self.JobControlXMLNode, "LogFilePathname")
-        if (xmlNode is None):
-            return
-        dxml.XMLTools_SetTextContents(xmlNode, newPathName)
-    # End - SetLogFilePathname
-
-
-
-
     #####################################################
     #
     # [MLJob::GetFilterProperties]
@@ -3272,39 +2628,6 @@ class MLJob():
 
         return numProperties, propertyRelationList, propertyNameList, propertyValueList
     # End - GetFilterProperties
-
-
-
-    #####################################################
-    #
-    # [MLJob::SetFilterProperties]
-    #
-    # This is a public procedure, it is called by the client.
-    #####################################################
-    def SetFilterProperties(self, newValue):
-        self.SetDataParam("ValueFilter", newValue)
-        return JOB_E_NO_ERROR
-    # End - GetFilterProperties
-
-
-
-
-    #####################################################
-    #
-    # [MLJob::IsTrainingOptionSet]
-    #
-    #####################################################
-    def IsTrainingOptionSet(self, optionName):
-        optionsStr = dxml.XMLTools_GetChildNodeTextAsStr(self.TrainingXMLNode, 
-                                                TRAINING_OPTIONS_ELEMENT_NAME, "")
-        optionsStr = optionsStr.lower()
-        optionName = optionName.lower()
-        if (optionName in optionsStr):
-            return True
-
-        return False
-    # End of IsTrainingOptionSet
-
 
 
 
@@ -3436,6 +2759,119 @@ class MLJob():
     # End - ParseConditionExpression
 
 
+    ################################################################################
+    #
+    # [GetNonce]
+    #
+    ################################################################################
+    def GetNonce(self):
+        return self.RuntimeNonce
+    # End - GetNonce
+
+
+    ################################################################################
+    #
+    # [IncrementNonce]
+    #
+    ################################################################################
+    def IncrementNonce(self):
+        self.RuntimeNonce += 1
+    # End - IncrementNonce
+
+
+    ################################################################################
+    #
+    # [ChecksumExists]
+    #
+    ################################################################################
+    def ChecksumExists(self, hashName):
+        if (hashName in self.HashDict):
+            return True
+        return False
+    # End - ChecksumExists
+
+
+    ################################################################################
+    #
+    # [SetArrayChecksum]
+    #
+    # inputArray is a numpy array, and may be 1, 2, or 3 dimensional.
+    ################################################################################
+    def SetArrayChecksum(self, inputArray, hashName):
+        if (numpy.isnan(inputArray).any()):
+            print("ERROR!:\nSetArrayChecksum passed an Invalid Array")
+            print("SetArrayChecksum. hashName = " + str(hashName))
+            print("SetArrayChecksum. inputArray = " + str(inputArray))
+            print("Exiting process...")
+            raise Exception()
+
+        hashVal = self.ComputeArrayChecksum(inputArray)
+        #print("SetArrayChecksum. Save hash " + hashName + " = " + hashVal)
+        self.HashDict[hashName] = hashVal
+    # End - SetArrayChecksum
+
+
+
+    ################################################################################
+    #
+    # [CompareArrayChecksum]
+    #
+    # inputArray is a numpy array, and may be 1, 2, or 3 dimensional.
+    ################################################################################
+    def CompareArrayChecksum(self, inputArray, hashName):
+        fDebug = False
+
+        newHashVal = self.ComputeArrayChecksum(inputArray)
+        if (fDebug):
+            print("CompareArrayChecksum. hashName = " + str(hashName) + ", newHashVal = " + str(newHashVal))
+        
+        if (hashName not in self.HashDict):
+            print("CompareArrayChecksum. hashName not in self.HashDict hashName = " + str(hashName))
+            return False
+
+        if (fDebug):
+            print("Compare hash " + hashName + ", Saved=" + str(self.HashDict[hashName]) + ", Expect=" + newHashVal)
+
+        isEqual = (newHashVal == self.HashDict[hashName])
+        return(isEqual)
+    # End - CompareArrayChecksum
+
+
+
+
+    ################################################################################
+    #
+    # [ComputeArrayChecksum]
+    #
+    # inputArray is a numpy array, and may be 1, 2, or 3 dimensional.
+    ################################################################################
+    def ComputeArrayChecksum(self, inputArray):
+        if (numpy.isnan(inputArray).any()):
+            print("ERROR!:\nComputeArrayChecksum passed an Invalid Array")
+            print("ComputeArrayChecksum. hashName = " + str(hashName))
+            print("ComputeArrayChecksum. inputArray = " + str(inputArray))
+            print("Exiting process...")
+            raise Exception()
+
+        rawByteArray = inputArray.tobytes('C')
+        newHashVal = hashlib.sha256(rawByteArray).hexdigest()
+        return(newHashVal)
+    # End - ComputeArrayChecksum
+
+
+
+    ################################################################################
+    #
+    # [GetArrayChecksum]
+    #
+    ################################################################################
+    def GetSavedArrayChecksum(self, hashName):
+        if (hashName not in self.HashDict):
+            return "NOT IN DICTIONARY"
+        return(self.HashDict[hashName])
+    # End - GetSavedArrayChecksum
+
+
 
 # End - class MLJob
 ################################################################################
@@ -3531,8 +2967,6 @@ def MLJob_CreateNewMLJob():
 ################################################################################
 def MLJob_CreateMLJobFromString(jobStr):
     job = MLJob()
-    job.InitNewJobImpl()
-    
     err = job.ReadJobFromString(jobStr)
     if (err != JOB_E_NO_ERROR):
         job = None

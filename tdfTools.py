@@ -1,6 +1,6 @@
 #####################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -329,9 +329,6 @@ g_DaysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 NEWLINE_STR = "\n"
 
-MAX_PREVIOUS_LAB_EXTRA_PREVIOUS = 365
-MAX_PREVIOUS_LAB_EXTRA_FUTURE   = 60
-
 # These separate variables in a list, or rows of variables in a sequence.
 VARIABLE_LIST_SEPARATOR             = ";"
 VARIABLE_ROW_SEPARATOR              = "/"
@@ -342,10 +339,14 @@ VARIABLE_ROW_SEPARATOR              = "/"
 VARIABLE_FUNCTION_PARAM_SEPARATOR   = ","
 VARIABLE_START_OFFSET_MARKER        = "["
 VARIABLE_STOP_OFFSET_MARKER         = "]"
+VARIABLE_OFFSET_RANGE_MARKER        = ":"
 VARIABLE_START_PARAM_ARGS_MARKER    = "("
 VARIABLE_STOP_PARAM_ARGS_MARKER     = ")"
 VARIABLE_FUNCTION_MARKER            = "."
+VARIABLE_RANGE_LAST_MATCH_MARKER    = "@"
 
+VARIABLE_RANGE_SIMPLE               = -1
+VARIABLE_RANGE_LAST_MATCH           = 1
 
 TDF_INVALID_VALUE = -314159265
 # This allows testing for TDF_INVALID_VALUE this resilient to rounding errors and
@@ -371,15 +372,24 @@ ________________________________________________________________________________
 ____________________________________________________________________________________________________"""
 
 
-################################################################################
-#
-# [TDF_GetDebugVal]
-#
-################################################################################
-def TDF_GetDebugVal(valName):
-    return(-1)
-# End - TDF_GetDebugVal
+# Test Options - Options that are not yet default, and are still in A/B testing.
+g_fAllowSloppyBackwardDates = False
 
+
+################################################################################
+#
+# [TDF_SetTestOptions]
+#
+################################################################################
+def TDF_SetTestOptions(testOptionList):
+    global g_fAllowSloppyBackwardDates
+
+    for optionName in testOptionList:
+        optionName = optionName.lower()
+        if (optionName == "sloppybackdates"):
+            g_fAllowSloppyBackwardDates = True
+    # End for optionName in testOptionList:
+# End - TDF_SetTestOptions
 
 
 
@@ -1336,7 +1346,7 @@ class TDFFileReader():
 
         # Get information about the result. However, this is optional
         if ((resultValueName is not None) and (resultValueName != "")):
-            self.resultLabInfo, self.resultValueName, self.resultValueOffset, _ = TDF_ParseOneVariableName(resultValueName)
+            self.resultLabInfo, self.resultValueName, self.resultValueOffsetStartRange, self.resultValueOffsetStopRange, self.resultValueOffsetRangeOption, _ = TDF_ParseOneVariableName(resultValueName)
             if (self.resultLabInfo is None):
                 TDF_Log("ERROR TDFFileReader::ParseVariableList Undefined resultValueName: " + resultValueName)
                 sys.exit(0)
@@ -1344,7 +1354,9 @@ class TDFFileReader():
         else:
             self.resultValueName = ""
             self.resultLabInfo = None
-            self.resultValueOffset = 0
+            self.resultValueOffsetStartRange = 0
+            self.resultValueOffsetStopRange = 0
+            self.resultValueOffsetRangeOption = VARIABLE_RANGE_SIMPLE
             self.resultDataType = TDF_DATA_TYPE_INT
 
         # Add any other variables we will use. This will include params for start/stop and criteria
@@ -1364,15 +1376,20 @@ class TDFFileReader():
         # realize we need more variables to compute derived values.
         numVarsInFullNameList = len(self.allValueVarNameList)
         self.allValuesLabInfoList = [None] * numVarsInFullNameList
-        self.allValueOffsets = [0] * numVarsInFullNameList
+        self.AllValuesOffsetStartRange = [0] * numVarsInFullNameList
+        self.AllValuesOffsetStopRange = [0] * numVarsInFullNameList
+        self.AllValuesOffsetRangeOption = [0] * numVarsInFullNameList
         self.allValuesFunctionNameList = [""] * numVarsInFullNameList
         self.allValuesFunctionObjectList = [None] * numVarsInFullNameList
         # Each iteration parses a single variable.
         for valueIndex, valueName in enumerate(self.allValueVarNameList):
-            labInfo, valueName, valueOffset, functionName = TDF_ParseOneVariableName(valueName)
+            labInfo, valueName, valueStartOffsetRange, valueStopOffsetRange, valueRangeOption, functionName = TDF_ParseOneVariableName(valueName)
+
             self.allValueVarNameList[valueIndex] = valueName
             self.allValuesLabInfoList[valueIndex] = labInfo
-            self.allValueOffsets[valueIndex] = valueOffset
+            self.AllValuesOffsetStartRange[valueIndex] = valueStartOffsetRange
+            self.AllValuesOffsetStopRange[valueIndex] = valueStopOffsetRange
+            self.AllValuesOffsetRangeOption[valueIndex] = valueRangeOption
             self.allValuesFunctionNameList[valueIndex] = functionName
         # End - for valueIndex, valueName in enumerate(inputValueNameList):
 
@@ -1416,7 +1433,7 @@ class TDFFileReader():
                 variableNameList = variableNameListStr.split(";")
                 if (variableNameList is not None):
                     for _, nameStr in enumerate(variableNameList):
-                        labInfo, valueName, valueOffset, functionName = TDF_ParseOneVariableName(nameStr)
+                        labInfo, valueName, valueStartOffsetRange, valueStopOffsetRange, valueRangeOption, functionName = TDF_ParseOneVariableName(nameStr)
 
                         # This is a bit subtle.
                         # The names in the list will be pulled in whenever they are available.
@@ -1433,7 +1450,9 @@ class TDFFileReader():
                         if ((valueName != "") and (valueName not in self.allValueVarNameList)):
                             self.allValueVarNameList.append(valueName)
                             self.allValuesLabInfoList.append(labInfo)
-                            self.allValueOffsets.append(valueOffset)
+                            self.AllValuesOffsetStartRange.append(valueStartOffsetRange)
+                            self.AllValuesOffsetStopRange.append(valueStopOffsetRange)
+                            self.AllValuesOffsetRangeOption.append(valueRangeOption)
                             self.allValuesFunctionNameList.append(functionName)
                             self.allValuesFunctionObjectList.append(None)
                     # End - for _, nameStr in enumerate(variableNameList):
@@ -1446,7 +1465,9 @@ class TDFFileReader():
         if (fDebug):
             print("TDFFileReader::ParseVariableList. self.numInputValues=" + str(self.numInputValues))
             print("TDFFileReader::ParseVariableList. self.allValueVarNameList=" + str(self.allValueVarNameList))
-            print("TDFFileReader::ParseVariableList. self.allValueOffsets=" + str(self.allValueOffsets))
+            print("TDFFileReader::ParseVariableList. self.AllValuesOffsetStartRange=" + str(self.AllValuesOffsetStartRange))
+            print("TDFFileReader::ParseVariableList. self.AllValuesOffsetStopRange=" + str(self.AllValuesOffsetStopRange))
+            print("TDFFileReader::ParseVariableList. self.AllValuesOffsetRangeOption=" + str(self.AllValuesOffsetRangeOption))
             print("TDFFileReader::ParseVariableList. self.allValuesFunctionNameList=" + str(self.allValuesFunctionNameList))
     # End -  ParseVariableList
 
@@ -1495,7 +1516,7 @@ class TDFFileReader():
     # a derived TDF file from an original source.
     #####################################################
     def GetRawXMLStrForFirstPatient(self):
-        fFoundPatient, _, _, _ = self.GotoFirstPatientEx()
+        fFoundPatient, _, _, _ = self.GotoFirstPatientEx(True)
         if (not fFoundPatient):
             return("")
 
@@ -1550,6 +1571,8 @@ class TDFFileReader():
     # End of GetFileDescriptionStr
 
 
+
+
     #####################################################
     #
     # [TDFFileReader::GotoFirstPatient]
@@ -1559,7 +1582,7 @@ class TDFFileReader():
     #   This is False if it hit the end of the file
     #####################################################
     def GotoFirstPatient(self):
-        fFoundPatient, _, _, _ = self.GotoFirstPatientEx()
+        fFoundPatient, _, _, _ = self.GotoFirstPatientEx(False)
         return(fFoundPatient)
     # End - GotoFirstPatient
 
@@ -1576,7 +1599,7 @@ class TDFFileReader():
     #   This is True iff the procedure found a valid patient entry.
     #   This is False if it hit the end of the file
     #####################################################
-    def GotoFirstPatientEx(self):
+    def GotoFirstPatientEx(self, fOnlyFindPatientBoundaries):
         self.fileHandle.seek(0, 0)
 
         # Advance in the file to the start of the patient list
@@ -1615,7 +1638,7 @@ class TDFFileReader():
         # End - Advance to the first patient
 
         # Now, go to the first patient
-        fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.GotoNextPatientEx()
+        fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.GotoNextPatientEx(fOnlyFindPatientBoundaries)
         return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
     # End - GotoFirstPatientEx
 
@@ -1631,7 +1654,7 @@ class TDFFileReader():
     #   This is False if it hit the end of the file
     #####################################################
     def GotoNextPatient(self):
-        fFoundPatient, _, _, _ = self.GotoNextPatientEx()
+        fFoundPatient, _, _, _ = self.GotoNextPatientEx(False)
         return fFoundPatient
     # End - GotoNextPatient(self)
 
@@ -1643,12 +1666,13 @@ class TDFFileReader():
     # [TDFFileReader::GotoNextPatientEx]
     # This returns more information than GotoNextPatient
     #####################################################
-    def GotoNextPatientEx(self):
+    def GotoNextPatientEx(self, fOnlyFindPatientBoundaries):
         fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.ReadNextPatientXMLStrImpl(TDF_INVALID_VALUE)
         if ((not fFoundPatient) or (fEOF)):
             return False, False, 0, 0
 
-        fFoundPatient = self.ParseCurrentPatientImpl()
+        if (not fOnlyFindPatientBoundaries):
+            fFoundPatient = self.ParseCurrentPatientImpl()
 
         return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
     # End - GotoNextPatientEx(self)
@@ -1705,7 +1729,8 @@ class TDFFileReader():
     # current partition. The selected patient may extend beyond
     # the end of the partition, which is OK. 
     #####################################################
-    def GotoFirstPatientInPartition(self, startPatientPosInFile, stopPatientPosInFile, startPartition, stopPartition):
+    def GotoFirstPatientInPartition(self, startPatientPosInFile, stopPatientPosInFile, startPartition, 
+                            stopPartition, fOnlyFindPatientBoundaries):
         fDebug = False
         fFoundPatient = False
         fEOF = False
@@ -1723,7 +1748,7 @@ class TDFFileReader():
         # Otherwise, we are looking for the patient in the file.
         # If this is the beginning of the file, then skip over the header.
         if (startPartition == 0):
-            fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.GotoFirstPatientEx()
+            fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.GotoFirstPatientEx(fOnlyFindPatientBoundaries)
             if (not fFoundPatient):
                 fEOF = True
             return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
@@ -1736,8 +1761,8 @@ class TDFFileReader():
 
         # Now, go to the first patient
         fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = self.GotoNextPatientInPartition(TDF_INVALID_VALUE, 
-                                                                                                    TDF_INVALID_VALUE, stopPartition)
-        #TDF_Log("GotoFirstPatientInPartition. fFoundPatient=" + str(fFoundPatient))
+                                                                                    TDF_INVALID_VALUE, stopPartition,
+                                                                                    fOnlyFindPatientBoundaries)
 
         return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
     # End - GotoFirstPatientInPartition
@@ -1759,7 +1784,8 @@ class TDFFileReader():
     # current partition. The selected patient may extend beyond
     # the end of the partition, which is OK. 
     #####################################################
-    def GotoNextPatientInPartition(self, startPatientPosInFile, stopPatientPosInFile, stopPartition):
+    def GotoNextPatientInPartition(self, startPatientPosInFile, stopPatientPosInFile, 
+                                    stopPartition, fOnlyFindPatientBoundaries):
         # If we already know the position of the patient, then just read
         # it. We don't need to find it.
         if ((startPatientPosInFile > 0) and (stopPatientPosInFile > 0)):
@@ -1771,7 +1797,8 @@ class TDFFileReader():
         if ((not fFoundPatient) or (fEOF)):
             return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
 
-        fFoundPatient = self.ParseCurrentPatientImpl()
+        if (not fOnlyFindPatientBoundaries):
+            fFoundPatient = self.ParseCurrentPatientImpl()
 
         return fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile
     # End - GotoNextPatientInPartition(self)
@@ -2032,7 +2059,7 @@ class TDFFileReader():
     #
     # This ASSUMES ParseVariableList() has already run (it's called in the constructor).
     # As a result, these are ALL valid: 
-    #       self.allValueVarNameList, self.allValueOffsets, self.allValuesFunctionNameList
+    #       self.allValueVarNameList, self.AllValuesOffsetStartRange, self.allValuesFunctionNameList
     #
     # I have debated whether latestTimelineEntryDataList should be a dict or an array.
     # I like the idea of an array, than can just map to the list
@@ -3914,41 +3941,46 @@ class TDFFileReader():
     #
     # BUGUG FIXME <> If this is called with several different offsets, 
     # like -1, then -3, then -5, it may return the *same* past timepoint
-    # for all of them. 
+    # for all of them.
     #####################################################
-    def GetNamedValueFromTimeline(self, valueName, offset, 
-                                functionObject, timeLineIndex, 
-                                timelineEntry, currentDayNum):
+    def GetNamedValueFromTimeline(self, valueName, 
+                                startOffsetRange, endOffsetRange, rangeOption, functionObject, 
+                                timeLineIndex, timelineEntry, 
+                                currentDayNum, prevUsedRangeDay):
         fDebug = False
         result = TDF_INVALID_VALUE
         fFoundIt = False
+        matchingRangeDay = -1
 
         if (fDebug):
-            print("GetNamedValueFromTimeline. valueName=" + str(valueName) + ", offset=" + str(offset))
-            print("GetNamedValueFromTimeline. functionObject=" + str(functionObject))
-            print("GetNamedValueFromTimeline. timelineEntry = " + str(timelineEntry))
+            print("GetNamedValueFromTimeline. valueName=" + str(valueName))
+            print("    startOffsetRange=" + str(startOffsetRange))
+            print("    functionObject=" + str(functionObject))
+            print("    timelineEntry = " + str(timelineEntry))
 
+        
         ############################
         # This is the simple case, we want a value from the current position in the timeline
         # Or, is this uses a function that is the relative change, then we also need the latest
-        if ((offset == 0) or (functionObject is not None)):
+        if ((startOffsetRange == endOffsetRange == 0) or (functionObject is not None)):
+            dayNum = timelineEntry['TimeDays']
             latestValues = timelineEntry['data']
             if (valueName not in latestValues):
-                return False, TDF_INVALID_VALUE
+                return False, TDF_INVALID_VALUE, -1
 
             result = latestValues[valueName]
             if (TDF_INVALID_VALUE == result):
-                return False, TDF_INVALID_VALUE
+                return False, TDF_INVALID_VALUE, -1
 
             if (fDebug):
                 print("GetNamedValueFromTimeline. result = " + str(result))
 
             # If there is no function, then we are done.
             if (functionObject is not None):
-                dayNum = timelineEntry['TimeDays']
                 timeMin = 0
                 if (fDebug):
-                    print("GetNamedValueFromTimeline. Apply function for value " + valueName + ", init value=" + str(result))
+                    print("GetNamedValueFromTimeline. Apply function for value " + valueName)
+                    print("     init value=" + str(result))
                     #print("GetNamedValueFromTimeline. functionObject=" + str(functionObject))
                 result = functionObject.ComputeNewValue(result, dayNum, timeMin)
                 if (fDebug):
@@ -3959,84 +3991,111 @@ class TDFFileReader():
                 if (result == TDF_INVALID_VALUE):
                     if (fDebug):
                         print("GetNamedValueFromTimeline. Function returned TDF_INVALID_VALUE")
-                    return False, TDF_INVALID_VALUE
+                    return False, TDF_INVALID_VALUE, -1
 
                 if (fDebug):
-                    print("GetNamedValueFromTimeline. Apply function for value " + valueName + "output=" + str(result))
+                    print("GetNamedValueFromTimeline. Apply function for value " + valueName)
+                    print("    output=" + str(result))
             # End - if (functionObject is not None):
 
-            return True, result
-        # End - if (offset == 0):
+            return True, result, dayNum
+        # End - if ((startOffsetRange == endOffsetRange == 0) or (functionObject is not None))
 
-        
-        targetDayNum = currentDayNum + offset
+
+        referenceDay = currentDayNum
+        if (rangeOption == VARIABLE_RANGE_LAST_MATCH):
+            referenceDay = prevUsedRangeDay
+        firstDayInRange = referenceDay + startOffsetRange
+        lastDayNumInRange = referenceDay + endOffsetRange
+        currentTimeLineIndex = timeLineIndex
+
         if (fDebug):
-            print("GetNamedValueFromTimeline. currentDayNum=" + str(currentDayNum) + ", offset=" + str(offset) 
-                    + ", targetDayNum=" + str(targetDayNum))
+            print("GetNamedValueFromTimeline...")
+            print("    currentDayNum = " + str(currentDayNum))
+            print("    referenceDay = " + str(referenceDay))
+            print("    firstDayInRange = " + str(firstDayInRange))
+            print("    lastDayNumInRange = " + str(lastDayNumInRange))
+            print("    startOffsetRange = " + str(startOffsetRange))
+            print("    endOffsetRange = " + str(endOffsetRange))
 
 
         ############################
-        # If offset<0, then we want a value from a previous position in the timeline.
-        if (offset < 0):
-            # We may search to before the current window. That is ok.
-            # The point of a past lab value is to get a trend, or baseline, and
-            # that should not be clipped to a single event, like one hospital admission.
-            pastTimeLineIndex = timeLineIndex
-            while (pastTimeLineIndex >= 0):
-                pastTimelineEntry = self.CompiledTimeline[pastTimeLineIndex]
-                pastDayNum = pastTimelineEntry['TimeDays']
-                #print("GetNamedValueFromTimeline. pastDayNum=" + str(pastDayNum))
-                if (pastDayNum <= targetDayNum):
-                    # Don't do anything if we are too far back. If I want a lab from
-                    # 30 days before now, don't confuse this with a lab 6 years ago.
-                    if ((targetDayNum - pastDayNum) >= MAX_PREVIOUS_LAB_EXTRA_PREVIOUS):
-                        #print("GetNamedValueFromTimeline. Too far back. pastDayNum=" + str(pastDayNum))
-                        return False, TDF_INVALID_VALUE
+        # If firstDayInRange > lastDayNumInRange, then we search backward
+        if (firstDayInRange > lastDayNumInRange):
+            # Make sure we are starting after the first day. The
+            # first day may be ahead us, such as varName[3:1], so we need to
+            # advance
+            while (currentTimeLineIndex < self.LastTimeLineIndex):
+                timelineEntry = self.CompiledTimeline[currentTimeLineIndex]
+                if (timelineEntry['TimeDays'] > firstDayInRange):
+                    break
+                currentTimeLineIndex = currentTimeLineIndex + 1
+            # End - while (currentTimeLineIndex >= 0):
+            
+            # Move the index through the timeline until we find and examine 
+            # all entries in the range of dates
+            while (currentTimeLineIndex >= 0):
+                timelineEntry = self.CompiledTimeline[currentTimeLineIndex]
+                dayNum = timelineEntry['TimeDays']
 
-                    pastLabValues = pastTimelineEntry['data']
-                    if (valueName in pastLabValues):
-                        #print("GetNamedValueFromTimeline. valueName is in prevDay. pastDayNum=" + str(pastDayNum))
-                        result = pastLabValues[valueName]                        
+                # We are moving backward, so once we are less than the end of the range, quit.
+                if (dayNum < lastDayNumInRange):
+                    break
+
+                if (dayNum <= firstDayInRange):
+                    labValueDict = timelineEntry['data']
+                    if (valueName in labValueDict):
+                        result = labValueDict[valueName]                        
                         if (TDF_INVALID_VALUE != result):
+                            #print("GetNamedValueFromTimeline Backward. dayNum = " + str(dayNum))
+                            #raise ValueError('GetNamedValueFromTimeline bailing out.')
                             fFoundIt = True
+                            matchingRangeDay = dayNum
                             break
-                # End - if (pastDayNum <= targetDayNum):
+                    # End - if (valueName in labValueDict):
+                # End - if (dayNum <= firstDayInRange):
 
-                pastTimeLineIndex = pastTimeLineIndex - 1
-            # End - while (pastTimeLineIndex >= 0):
-        # End - if (offset < 0):
+                currentTimeLineIndex = currentTimeLineIndex - 1
+            # End - while (currentTimeLineIndex >= 0):
+        # End - if (firstDayInRange > lastDayNumInRange):
         ############################
-        # If offset>0, then we want a value from a future position in the timeline.
-        elif (offset > 0):
-            # We may search past the current window. That is ok.
-            futureTimeLineIndex = timeLineIndex
+        # Otherwise, the first day is before the last day, so we search forwards
+        else:  # (firstDayInRange <= lastDayNumInRange)
+            # Make sure we are starting before the first day. The
+            # first day may be behind us, such as varName[-3:5]
+            while (currentTimeLineIndex > 0):
+                timelineEntry = self.CompiledTimeline[currentTimeLineIndex]
+                if (timelineEntry['TimeDays'] < firstDayInRange):
+                    break
+                currentTimeLineIndex = currentTimeLineIndex - 1
+            # End - while (currentTimeLineIndex >= 0):
 
-            while (futureTimeLineIndex <= self.LastTimeLineIndex):
-                futureTimelineEntry = self.CompiledTimeline[futureTimeLineIndex]
-                futureDayNum = futureTimelineEntry['TimeDays']
-                #print("GetNamedValueFromTimeline. futureDayNum=" + str(futureDayNum))
+            # Now, search forward.
+            while (currentTimeLineIndex <= self.LastTimeLineIndex):
+                timelineEntry = self.CompiledTimeline[currentTimeLineIndex]
+                dayNum = timelineEntry['TimeDays']
 
-                if (futureDayNum >= targetDayNum):
-                    # Don't do anything if we are too far ahead. If I want a lab from
-                    # 3 days after now, don't confuse this with a lab 6 years in the future
-                    if ((futureDayNum - targetDayNum) >= MAX_PREVIOUS_LAB_EXTRA_FUTURE):
-                        #print("GetNamedValueFromTimeline. Too far ahead. futureDayNum=" + str(futureDayNum))
-                        return False, TDF_INVALID_VALUE
+                # Move the index through the timeline until we find and examine all entries 
+                # in the range of dates
+                if (dayNum > lastDayNumInRange):
+                    break
 
-                    futureLabValues = futureTimelineEntry['data']
-                    if (valueName in futureLabValues):
-                        #print("GetNamedValueFromTimeline. valueName is in future. futureDayNum=" + str(futureDayNum))
-                        result = futureLabValues[valueName]
+                if (dayNum >= firstDayInRange):
+                    labValueDict = timelineEntry['data']
+                    if (valueName in labValueDict):
+                        result = labValueDict[valueName]
                         if (TDF_INVALID_VALUE != result):
                             fFoundIt = True
+                            matchingRangeDay = dayNum
                             break
-                # End - if (futureDayNum >= targetDayNum):
+                    # End - if (valueName in labValueDict):
+                # End - if (dayNum >= firstDayInRange):
 
-                futureTimeLineIndex += 1
-            # End - while (futureTimeLineIndex <= self.lastTimeLineIndex):
-        # End - if (offset > 0):
+                currentTimeLineIndex += 1
+            # End - while (currentTimeLineIndex <= self.lastTimeLineIndex):
+        # End - if (firstDayInRange <= lastDayNumInRange):
 
-        return fFoundIt, result
+        return fFoundIt, result, matchingRangeDay
     # End - GetNamedValueFromTimeline
 
 
@@ -4163,11 +4222,15 @@ class TDFFileReader():
                                 fNormalizeInputs):
         fDebug = False
         numRequireProperties = len(requirePropertyNameList)
+        matchingRangeDay = -1
+
 
         if (fDebug):
             print("GetDataForCurrentPatient, start")
             print("GetDataForCurrentPatient, self.allValueVarNameList=" + str(self.allValueVarNameList))
-            print("GetDataForCurrentPatient, self.allValueOffsets=" + str(self.allValueOffsets))
+            print("GetDataForCurrentPatient, self.AllValuesOffsetStartRange=" + str(self.AllValuesOffsetStartRange))
+            print("GetDataForCurrentPatient, self.AllValuesOffsetStopRange=" + str(self.AllValuesOffsetStopRange))
+            print("GetDataForCurrentPatient, self.AllValuesOffsetRangeOption=" + str(self.AllValuesOffsetRangeOption))
             print("GetDataForCurrentPatient, self.allValuesFunctionNameList=" + str(self.allValuesFunctionNameList))
             print("GetDataForCurrentPatient, self.allValuesFunctionObjectList=" + str(self.allValuesFunctionObjectList))
             print("GetDataForCurrentPatient, requirePropertyRelationList=" + str(requirePropertyRelationList))
@@ -4252,6 +4315,7 @@ class TDFFileReader():
             # This assumes that each entry in the timeline is a different returned result.
             latestValues = timelineEntry['data']
             foundAllInputs = True
+            matchingRangeDay = -1
             for valueIndex in range(self.numInputValues):
                 # Get information about the lab.
                 try:
@@ -4261,9 +4325,13 @@ class TDFFileReader():
                     break
 
                 # Get the lab value itself.
-                foundIt, result = self.GetNamedValueFromTimeline(valueName, self.allValueOffsets[valueIndex],
+                foundIt, result, matchingRangeDay = self.GetNamedValueFromTimeline(valueName, 
+                                                                self.AllValuesOffsetStartRange[valueIndex],
+                                                                self.AllValuesOffsetStopRange[valueIndex],
+                                                                self.AllValuesOffsetRangeOption[valueIndex],
                                                                 self.allValuesFunctionObjectList[valueIndex],
-                                                                timeLineIndex, timelineEntry, currentDayNum)
+                                                                timeLineIndex, timelineEntry, currentDayNum,
+                                                                matchingRangeDay)
                 if (not foundIt):
                     if (fDebug):
                         print("GetDataForCurrentPatient. Could not find valueName=" + str(valueName))
@@ -4312,9 +4380,12 @@ class TDFFileReader():
             # Now, try to get the result for this time step.
             # Note, this is NOT normalized. That is a category ID, or exact value like INR, 
             # so we want the actual numeric value, not a normalized version.            
-            foundResult, result = self.GetNamedValueFromTimeline(self.resultValueName, 
-                                                                self.resultValueOffset, None,
-                                                                timeLineIndex, timelineEntry, currentDayNum)
+            foundResult, result, matchingRangeDay = self.GetNamedValueFromTimeline(self.resultValueName, 
+                                                                self.resultValueOffsetStartRange, 
+                                                                self.resultValueOffsetStopRange, 
+                                                                self.resultValueOffsetRangeOption,
+                                                                None, timeLineIndex, timelineEntry, currentDayNum,
+                                                                matchingRangeDay)
             # If we found all values, then assemble the next vector of results.
             if (foundResult):
                 if (fAddMinibatchDimension):
@@ -4390,9 +4461,6 @@ class TDFFileReader():
 
 
 
-
-
-
     #####################################################
     #
     # [TDFFileReader::GetSyncedPairOfValueListsForCurrentPatient]
@@ -4417,6 +4485,7 @@ class TDFFileReader():
         value2FromCurrentDay = TDF_INVALID_VALUE
         valueList1 = []
         valueList2 = []
+        matchingRangeDay = -1
 
         # Initialize the time function objects
         # Things like velocity and acceleration start at an initial state for each different patient
@@ -4485,10 +4554,16 @@ class TDFFileReader():
             # NOTE!!!!
             # If we want to correlate things like a daily med and a lab from morning labs, they
             # may appear at different times on the same day.
-            foundNewValue1, value1 = self.GetNamedValueFromTimeline(nameStem1, valueOffset1, functionObject1,
-                                                                   timeLineIndex, timelineEntry, currentDayNum)
-            foundNewValue2, value2 = self.GetNamedValueFromTimeline(nameStem2, valueOffset2, functionObject2,
-                                                                   timeLineIndex, timelineEntry, currentDayNum)
+            foundNewValue1, value1, matchingRangeDay = self.GetNamedValueFromTimeline(nameStem1, 
+                                                                    valueOffset1, valueOffset1, -1,
+                                                                    functionObject1,
+                                                                    timeLineIndex, timelineEntry, 
+                                                                    currentDayNum, matchingRangeDay)
+            foundNewValue2, value2, matchingRangeDay = self.GetNamedValueFromTimeline(nameStem2, 
+                                                                    valueOffset2, valueOffset2, -1,
+                                                                    functionObject2,
+                                                                    timeLineIndex, timelineEntry, 
+                                                                    currentDayNum, matchingRangeDay)
 
             # Save valid values.
             # BE CAREFUL! Some values, like drug doses, may be 0 on days the med is not given.
@@ -4535,7 +4610,7 @@ class TDFFileReader():
         # Get information about the requested variables. This splits
         # complicated name values like "eGFR[-30]" into a name and an 
         # offset, like "eGFR" and "-30"
-        labInfo, nameStem, _, functionName = TDF_ParseOneVariableName(valueName)
+        labInfo, nameStem, _, _, _, functionName = TDF_ParseOneVariableName(valueName)
         if (labInfo is None):
             TDF_Log("!Error! Cannot parse variable: " + valueName)
             return valueList
@@ -4577,7 +4652,6 @@ class TDFFileReader():
             if (fDebug):
                 print("GetValuesBetweenDays. latestValues=" + str(latestValues))
 
-            #print("Found Value: " + str(valueFloat))
             # Normalize the values
             labMinVal = float(labInfo['minVal'])
             labMaxVal = float(labInfo['maxVal'])
@@ -4593,6 +4667,71 @@ class TDFFileReader():
 
         return valueList
     # End - GetValuesBetweenDays()
+
+
+
+
+
+
+    #####################################################
+    #
+    # [TDFFileReader::GetRawValues]
+    #
+    # This returns one lists of values, and is used when we 
+    # preflight.
+    #####################################################
+    def GetRawValues(self, valueName, fOnlyOneValuePerDay):
+        fDebug = False
+        prevDayNum = -1
+        valueList = []
+
+        # Get information about the requested variables. This splits
+        # complicated name values like "eGFR[-30]" into a name and an 
+        # offset, like "eGFR" and "-30"
+        labInfo, nameStem, _, _, _, functionName = TDF_ParseOneVariableName(valueName)
+        if (labInfo is None):
+            TDF_Log("!Error! Cannot parse variable: " + valueName)
+            return valueList
+
+        functionObject = None
+        if (functionName != ""):
+            functionObject = timefunc.CreateTimeValueFunction(functionName, nameStem)
+            if (functionObject is None):
+                print("\n\n\nERROR!! GetValuesBetweenDays Undefined function: " + functionName)
+                sys.exit(0)
+
+        # This loop will iterate over each step in the timeline.
+        for timeLineIndex in range(self.LastTimeLineIndex + 1):
+            timelineEntry = self.CompiledTimeline[timeLineIndex]
+
+            currentDayNum = timelineEntry['TimeDays']
+            if ((fOnlyOneValuePerDay) and (prevDayNum == currentDayNum)):
+                continue
+            prevDayNum = currentDayNum
+
+            latestValues = timelineEntry['data']
+            if (valueName not in latestValues):
+                continue
+
+            value = latestValues[valueName]
+            try:
+                valueFloat = float(value)
+            except Exception:
+                valueFloat = TDF_INVALID_VALUE
+            if ((valueFloat == TDF_INVALID_VALUE) or (valueFloat <= TDF_SMALLEST_VALID_VALUE)):
+                continue
+
+            if (fDebug):
+                print("GetValuesBetweenDays. latestValues=" + str(latestValues))
+
+            newDict = {"Day": currentDayNum, "Val": valueFloat}
+            valueList.append(newDict)
+        # End - for timeLineIndex in range(self.LastTimeLineIndex + 1)
+
+        return valueList
+    # End - GetRawValues()
+
+
 
 
 
@@ -4813,6 +4952,27 @@ class TDFFileReader():
 
 
 
+    #####################################################
+    #
+    # [TDFFileReader::PrintDebugInfo]
+    #
+    #####################################################
+    def PrintDebugInfo(self):
+        print("TDF Debug Info:")
+        print("    self.tdfFilePathName = " + str(self.tdfFilePathName))
+        print("    self.MinutesPerTimelineEntry = " + str(self.MinutesPerTimelineEntry))
+        print("    self.fCarryForwardPreviousDataValues = " + str(self.fCarryForwardPreviousDataValues))
+        print("    self.numInputValues=" + str(self.numInputValues))
+        print("    self.allValueVarNameList=" + str(self.allValueVarNameList))
+        print("    self.allValuesLabInfoList=" + str(self.allValuesLabInfoList))
+        print("    self.AllValuesOffsetStartRange=" + str(self.AllValuesOffsetStartRange))
+        print("    self.AllValuesOffsetStopRange=" + str(self.AllValuesOffsetStopRange))
+        print("    self.AllValuesOffsetRangeOption=" + str(self.AllValuesOffsetRangeOption))
+        print("    self.allValuesFunctionNameList=" + str(self.allValuesFunctionNameList))
+    # End - 
+
+
+
 # End - class TDFFileReader
 
 
@@ -4827,7 +4987,7 @@ class TDFFileReader():
 ################################################################################
 def TDF_GetVariableType(fullValueName):
     # Get information about the lab.
-    labInfo, _, _, functionName = TDF_ParseOneVariableName(fullValueName)
+    labInfo, _, _, _, _, functionName = TDF_ParseOneVariableName(fullValueName)
     if (labInfo is None):
         #print("Error! TDF_GetVariableType found undefined lab name: " + fullValueName)
         return(TDF_DATA_TYPE_UNKNOWN)
@@ -4853,7 +5013,7 @@ def TDF_GetVariableType(fullValueName):
 ################################################################################
 def TDF_GetMinMaxValuesForVariable(fullValueName):
     # Get information about the lab.
-    labInfo, _, _, _ = TDF_ParseOneVariableName(fullValueName)
+    labInfo, _, _, _, _, _ = TDF_ParseOneVariableName(fullValueName)
     if (labInfo is None):
         print("Error! TDF_GetMinMaxValuesForVariable found undefined lab name: " + fullValueName)
         return TDF_INVALID_VALUE, TDF_INVALID_VALUE
@@ -4871,7 +5031,7 @@ def TDF_GetMinMaxValuesForVariable(fullValueName):
 ################################################################################
 def TDF_GetNumClassesForVariable(fullValueName):
     # Get information about the lab.
-    labInfo, _, _, _ = TDF_ParseOneVariableName(fullValueName)
+    labInfo, _, _, _, _, _ = TDF_ParseOneVariableName(fullValueName)
     if (labInfo is None):
         print("Error! TDF_GetNumClassesForVariable found undefined lab name: " + fullValueName)
         return(1)
@@ -4897,12 +5057,13 @@ def TDF_GetNumClassesForVariable(fullValueName):
 #####################################################
 def TDF_ParseOneVariableName(valueName):
     labInfo = None
-    valueOffset = 0
+    valueOffsetStartRange = 0
+    valueOffsetStopRange = 0
+    valueOffsetRangeOption = VARIABLE_RANGE_SIMPLE
     functionName = ""
 
     # The variable names come from a user config file, so may have whitespace.
-    valueName = valueName.lstrip()
-    valueName = valueName.rstrip()
+    valueName = valueName.replace(" ", "")
 
     # Any variable may have a function. For example: Cr.rate
     # Check if there is a function marker to see if we need to 
@@ -4913,19 +5074,62 @@ def TDF_ParseOneVariableName(valueName):
         functionName = nameParts[1]
     # End - if (VARIABLE_START_PARAM_ARGS_MARKER in varName):
 
-    # A single name may have the form "foo" or "foo[n]" where n is an offset.
+    # A single name may have one of several forms:
+    #   "foo"
+    #   "foo[n]" where n is an offset.
+    #   "foo[start:stop]"
+    #   "foo[@ start:stop]"
+    #
+    # Future options:
+    #   "foo[largest start:stop]"
+    #   "foo[smallest start:stop]"
+    #   "foo[avg start:stop]"
+    #   "foo[first start:stop]"
+    #   "foo[last start:stop]"
+    #
     # Split the names into name stems and optional offsets
     if (VARIABLE_START_OFFSET_MARKER in valueName):
         nameParts = valueName.split(VARIABLE_START_OFFSET_MARKER, 1)
         valueName = nameParts[0]
         valueOffsetStr = nameParts[1]
         valueOffsetStr = valueOffsetStr.split(VARIABLE_STOP_OFFSET_MARKER, 1)[0]
-        valueOffset = int(valueOffsetStr.lower())
+
+        # Check if this is a simple offset like "[1]" or a range like "[1:8]"
+        if (VARIABLE_OFFSET_RANGE_MARKER in valueOffsetStr):
+            nameParts = valueOffsetStr.split(VARIABLE_OFFSET_RANGE_MARKER, 1)
+            startRangeStr = nameParts[0]
+            stopRangeStr = nameParts[1]
+
+            # Parse any range options.
+            if (startRangeStr.startswith(VARIABLE_RANGE_LAST_MATCH_MARKER)):
+                valueOffsetRangeOption = VARIABLE_RANGE_LAST_MATCH
+                startRangeStr = startRangeStr[1:]
+
+            valueOffsetStartRange = int(startRangeStr)
+            valueOffsetStopRange = int(stopRangeStr)
+
+            if (False):
+                print("TDF_ParseOneVariableName:")
+                print("    valueName: " + str(valueName))
+                print("    nameParts: " + str(nameParts))
+                print("    valueOffsetStr: " + str(valueOffsetStr))
+                print("    startRangeStr: " + str(startRangeStr))
+                print("    stopRangeStr: " + str(stopRangeStr))
+                print("    valueOffsetStartRange: " + str(valueOffsetStartRange))
+                print("    valueOffsetStopRange: " + str(valueOffsetStopRange))
+                print("TDF_ParseOneVariableName: Bailing out")
+                sys.exit(0)
+            # End - if (fDebug):
+        else:
+            valueOffsetStartRange = int(valueOffsetStr)
+            valueOffsetStopRange = valueOffsetStartRange
+    # End - if (VARIABLE_START_OFFSET_MARKER in valueName):
+
 
     if ((valueName != "") and (valueName in g_LabValueInfo)):
         labInfo = g_LabValueInfo[valueName]
 
-    return labInfo, valueName, valueOffset, functionName
+    return labInfo, valueName, valueOffsetStartRange, valueOffsetStopRange, valueOffsetRangeOption, functionName
 # End - TDF_ParseOneVariableName
 
 

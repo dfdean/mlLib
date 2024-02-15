@@ -564,6 +564,13 @@ def XMLTools_GetChildNodeTextAsFloat(parentNode, childName, defaultVal):
         resultFloat = float(textStr)
         return(resultFloat)
     except Exception:
+        pass
+
+    try:
+        resultInt = int(textStr)
+        resultFloat = float(resultInt)
+        return(resultFloat)
+    except Exception:
         return(defaultVal)
 # XMLTools_GetChildNodeTextAsFloat
 

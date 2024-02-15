@@ -1231,7 +1231,12 @@ def MLExperiment_RunAllJobsInDirectory(dirPathName):
 
     # Run each job. This ASSUMES we run every job in the directory
     fileNameList = os.listdir(dirPathName)
+    # Sort alphabetically
+    fileNameList = sorted(fileNameList, key=lambda s: s.lower())
     for fileName in fileNameList:
+        if (fileName.lower().endswith(".jpg")):
+            continue
+
         srcFilePathName = os.path.join(dirPathName, fileName)
         if (fDebug):
             print("MLExperiment_RunAllJobsInDirectory. fileName = " + fileName 
@@ -1258,6 +1263,115 @@ def MLExperiment_RunAllJobsInDirectory(dirPathName):
         # End - if ((os.path.exists(srcFilePathName)) and (isfile(srcFilePathName))):
     # End - for fileName in fileNameList:
 # End - MLExperiment_RunAllJobsInDirectory
+
+
+
+
+
+
+################################################################################
+#
+# [MLExperiment_RunAndGraphAllJobsInDirectory]
+#
+################################################################################
+def MLExperiment_RunAndGraphAllJobsInDirectory(dirPathName, 
+                                    accuracyGraphFilePathName,
+                                    countsGraphFilePathName):
+    fDebug = False
+    if (fDebug):
+        print("MLExperiment_RunAndGraphAllJobsInDirectory. dirPathName=" + dirPathName)
+
+    # Run the jobs. 99% of the work is in this procedure call
+    MLExperiment_RunAllJobsInDirectory(dirPathName)
+
+    # Make a series of result lists for this result variable.
+    numSequencesTrainedPerEpochList = []
+    numPatientsTrainedPerEpochList = []
+    numDataPointsPerEpochList = []
+    numSequencesTestedList = []
+    percentAccurateWithin10PercentList = []
+    jobFileNameList = []
+    resultVar = ""
+
+    # Collect results from each job
+    fileNameList = os.listdir(dirPathName)
+    for fileName in fileNameList:
+        if (fileName.lower().endswith(".jpg")):
+            continue
+
+        srcFilePathName = os.path.join(dirPathName, fileName)
+        if (fDebug):
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. fileName = " + fileName 
+                    + ", srcFilePathName = " + srcFilePathName)
+
+        if ((not os.path.exists(srcFilePathName)) or (not isfile(srcFilePathName))):
+            continue
+
+        # Read the job
+        jobErr, job = mlJob.MLJob_ReadExistingMLJob(srcFilePathName)
+        if (mlJob.JOB_E_NO_ERROR != jobErr):
+            print("ERROR when opening a job file: " + srcFilePathName)
+            sys.exit(0)
+            continue
+
+        # Get the testing results.
+        # This is an integer result value, so it uses percent accuracy, not AUC or F1 or something else
+        numSequencesTrainedPerEpoch = job.GetNumSequencesTrainedPerEpoch()
+        numPatientsTrainedPerEpoch = job.GetNumPatientsTrainedPerEpoch()
+        numDataPointsPerEpoch = job.GetNumDataPointsPerEpoch()
+        numSequencesTested = job.GetNumSequencesTested()
+        testResults = job.GetTestResults()
+        #testNumItemsPerClass = job.GetTestNumItemsPerClass()
+        lossList = job.GetAvgLossPerEpochList()
+        if (resultVar == ""):
+            resultVar = job.GetNetworkOutputVarName()
+        if (fDebug):
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. numSequencesTrainedPerEpoch=" + str(numSequencesTrainedPerEpoch))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. numPatientsTrainedPerEpoch=" + str(numPatientsTrainedPerEpoch))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. numDataPointsPerEpoch=" + str(numDataPointsPerEpoch))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. numSequencesTested=" + str(numSequencesTested))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. testResults=" + str(testResults))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. lossList=" + str(lossList))
+
+        numSequencesTrainedPerEpochList.append(numSequencesTrainedPerEpoch)
+        numPatientsTrainedPerEpochList.append(numPatientsTrainedPerEpoch)
+        numDataPointsPerEpochList.append(numDataPointsPerEpoch)
+        numSequencesTestedList.append(numSequencesTested)
+        totalNumAccurate = testResults["NumCorrectPredictions"] + testResults["NumPredictionsWithin2Percent"] + testResults["NumPredictionsWithin5Percent"] + testResults["NumPredictionsWithin10Percent"]
+        if (numSequencesTested > 0):
+            percentAccurate = float(totalNumAccurate) / float(numSequencesTested)
+        else:
+            percentAccurate = 0.0
+        percentAccurate = percentAccurate * 100.0
+        fractionInt = round(percentAccurate)
+        percentAccurateWithin10PercentList.append(fractionInt)
+        # For readability (so the names don't overlap) make every other name 1-line lower
+        if ((len(jobFileNameList) % 2) == 0):
+            jobFileNameList.append(fileName)
+        else:
+            jobFileNameList.append("\n" + fileName)
+
+        if (fDebug):
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. totalNumAccurate=" + str(totalNumAccurate))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. percentAccurate=" + str(percentAccurate))
+            print("MLExperiment_RunAndGraphAllJobsInDirectory. fractionInt=" + str(fractionInt))
+    # End - for fileName in fileNameList:
+
+
+    # Make a graph of the results from each job
+    if (len(jobFileNameList) > 0):
+        DataShow.DrawBarGraph("Percent Predictions Within 10 Percent for " + resultVar, 
+                          "Job File", jobFileNameList, 
+                          "Percent Predictions Within 10 Percent", percentAccurateWithin10PercentList,
+                          False, accuracyGraphFilePathName)
+
+        DataShow.DrawDoubleBarGraph("Num Data Points for " + resultVar,
+                          "Job File", jobFileNameList, "", 
+                          "Training Data", numDataPointsPerEpochList,
+                          "Testing Data", numSequencesTestedList,
+                          False, countsGraphFilePathName)
+    # End - if (len(jobFileNameList) > 0):
+# End - MLExperiment_RunAndGraphAllJobsInDirectory
 
 
 
