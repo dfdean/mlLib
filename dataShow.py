@@ -186,7 +186,8 @@ def DrawHorizontalBarGraph(titleStr, yAxisNameList, xLabelStr, xAxisValueList,
 #
 ################################################################################
 def DrawDoubleBarGraph(titleStr, xLabelStr, xAxisNameList, yLabelStr, 
-                        y1LabelStr, y1AxisValueList, y2LabelStr, y2AxisValueList, 
+                        y1LabelStr, y1AxisValueList, 
+                        y2LabelStr, y2AxisValueList, 
                         showInGUI, filePath):
     xLabelLocations = np.arange(len(xAxisNameList))
     barWidth = 0.36

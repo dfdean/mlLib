@@ -1,6 +1,6 @@
 ################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -57,9 +57,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-# XGBoost and its dependencies
-import xgboost as xgb
-
 # This file runs in the lib directory, so it does not need any special path to find 
 # any other files in the lib dir.
 import xmlTools as dxml
@@ -72,6 +69,12 @@ torch.manual_seed(1)
 PARTITION_SIZE = 10 * (1024 * 1024)
 USE_GPU = False
 MAX_RNN_DEPTH_WITH_GPU = 700
+
+# We have a different checksum for saving or validating.
+# The save checksum makes sure that we save/restore the neural net correctly,
+# while the validate chesum ensures each forward/backward propagate does some
+# useful work. To keep these two separate, we use different names for the checksums.
+g_SaveChecksumPrefix = "SAVE_"
 
 
 ########################################
@@ -89,31 +92,18 @@ E_INVALID_CLIENT_REQUEST    = 100
 # Job Request Errors
 E_UNRECOGNIZED_OPTIMIZER    = 200
 
-
-########################################
-# Network Protocol Warning Codes
-#
-# WARNING!
-# These are defined in several files: predictor.py and mlEngine.py
-# Do not change in one file and not the other.
-########################################
-NO_WARN                                 = 0
-E_WARN_CANT_PREDICT_START_OF_DISEASE    = 1
-
 # These are just used for debugging
-DD_DEBUG = True
-DD_DEBUG_TRUNCATE_PREFLIGHT         = False
-DD_DEBUG_TRUNCATE_TRAINING          = False
-DD_DEBUG_TRUNCATE_TESTING           = False
-DD_DEBUG_TRUNCATE_NUM_PARTITIONS    = 3
+DD_DEBUG = False
+
+NETWORK_MIXED_ANALOG_DIGITAL_ELEMENT_NAME = "MixAnalogDigital"
 
 RECURRENT_STATE_LINEAR_UNIT_NAME    = "ReccurentStateLinearUnit"
 
+# LSTM
 LSTM_SAVED_STATE_NAME               = "LSTMState"
 LSTM_LINEAR_UNIT_SAVED_STATE_NAME   = "LSTMLinearUnit"
 
 # Debugging only
-#torch.autograd.set_detect_anomaly(True)
 g_ChildProcessPipe = None
 
 
@@ -145,15 +135,17 @@ def MLEngine_Init_GPU():
 ################################################################################
 ################################################################################
 def ASSERT_ERROR(messageStr):
-    fExitOnAsserts = True
+    fKillProcessOnAsserts = True
+    fQuitButKeepRunningOnAsserts = False
 
     print("ERROR! " + messageStr)
-    if (fExitOnAsserts):
+    if (fKillProcessOnAsserts):
         print("Exiting process...")
+        raise Exception()
+    elif (fQuitButKeepRunningOnAsserts):
         if (g_ChildProcessPipe is not None):
-            MLEngine_ReturnResultsFromChildProcess(g_ChildProcessPipe, None, -1, -1, 
+            MLEngine_ReturnResultsFromChildProcess(g_ChildProcessPipe, None, -1, -1, 0,
                                                     True, -1, -1, E_ASSERT_ERROR, -1)
-        sys.exit(0)
 # End - ASSERT_ERROR
 
 
@@ -164,6 +156,146 @@ def ASSERT_IF(fCondition, messageStr):
     if (fCondition):
         ASSERT_ERROR(messageStr)
 # End - ASSERT_IF
+
+
+
+################################################################################
+#
+# [MLEngine_SaveLinearUnitToJob]
+#
+################################################################################
+def MLEngine_SaveLinearUnitToJob(linearUnit, job, name):
+    fDebug = False
+    if (fDebug):
+        print("MLEngine_SaveLinearUnitToJob. name=" + name)
+
+    # Make private copies so we do not affect future backprop.
+    weightMatrix = linearUnit.weight.detach().numpy()
+    biasVector = linearUnit.bias.detach().numpy()
+
+    job.SetLinearUnitMatrices(name, weightMatrix, biasVector)
+# End - MLEngine_SaveLinearUnitToJob
+
+
+
+
+
+################################################################################
+#
+# [MLEngine_ReadLinearUnitFromJob]
+#
+################################################################################
+def MLEngine_ReadLinearUnitFromJob(job, name):
+    fDebug = False
+    if (fDebug):
+        print("MLEngine_ReadLinearUnitFromJob. name=" + name)
+
+    fFoundIt, weightMatrix, biasVector = job.GetLinearUnitMatrices(name)
+    if (not fFoundIt):
+        if (fDebug):
+            print("MLEngine_ReadLinearUnitFromJob. Error! Not found")
+        return None
+
+    # WARNING!!!!
+    # Leave these as float32. Changing them to 64 will cause the checksum code to
+    # compute different checksums for Linear Units when they are restored by this
+    # routine compare to when they are initialized.
+    weightTensor = torch.tensor(weightMatrix, dtype=torch.float32)
+    biasTensor = torch.tensor(biasVector, dtype=torch.float32)
+    weightSize = weightTensor.size()
+    inputSize = weightSize[1]
+    outputSize = weightSize[0]
+
+    linearUnit = nn.Linear(inputSize, outputSize)
+    linearUnit.weight = torch.nn.Parameter(weightTensor)
+    linearUnit.bias = torch.nn.Parameter(biasTensor)
+
+    return linearUnit
+# End - MLEngine_ReadLinearUnitFromJob
+
+
+
+
+################################################################################
+#
+# [MLEngine_CheckArray]
+#
+# inputArray is a numpy array, and may be 1, 2, or 3 dimensional.
+################################################################################
+def MLEngine_CheckArray(linearUnit, name):
+    fValid = True
+    fAbortOnError = False
+
+    # Must call clone() to force the data structures to get the latest version of the data
+    # The optimizer seems to play games with multiple versions
+    weightMatrix = linearUnit.weight.clone().detach().numpy()
+    biasVector = linearUnit.bias.clone().detach().numpy()
+
+    if (np.isnan(weightMatrix).any()):
+        print("ERROR!:\nMLEngine_CheckArray passed an Invalid Matrix")
+        fValid = False
+
+    if (np.isnan(biasVector).any()):
+        print("ERROR!:\nMLEngine_CheckArray passed an Invalid Bias Vector")
+        fValid = False
+
+    if (not fValid):
+        print("    name = " + str(name))
+        print("    weightMatrix = " + str(weightMatrix))
+        print("    biasVector = " + str(biasVector))
+        if (fAbortOnError):
+            print("Exiting process...")
+            raise Exception()
+
+    return fValid
+# End - MLEngine_CheckArray
+
+
+
+
+################################################################################
+#
+# [MLEngine_SetArrayChecksum]
+#
+# inputArray is a numpy array, and may be 1, 2, or 3 dimensional.
+################################################################################
+def MLEngine_SetArrayChecksum(job, linearUnit, hashName):
+    fDebug = False
+    if (fDebug):
+        print("MLEngine_SetArrayChecksum. hashName=" + hashName)
+
+    # Must call clone() to force the data structures to get the latest version of the data
+    # The optimizer seems to play games with multiple versions
+    weightMatrix = linearUnit.weight.clone().detach().numpy()
+    biasVector = linearUnit.bias.clone().detach().numpy()
+
+    job.SetArrayChecksum(weightMatrix, hashName)
+# End - MLEngine_SetArrayChecksum
+
+
+
+
+################################################################################
+#
+# [MLEngine_ArrayChecksumEqual]
+#
+################################################################################
+def MLEngine_ArrayChecksumEqual(job, linearUnit, hashName, fExpectEqual):
+    # Must call clone() to force the data structures to get the latest version of the data
+    # The optimizer seems to play games with multiple versions
+    weightMatrix = linearUnit.weight.clone().detach().numpy()
+    biasVector = linearUnit.bias.clone().detach().numpy()
+
+    isEqual = job.CompareArrayChecksum(weightMatrix, hashName)
+    if ((not isEqual) and (fExpectEqual)):
+        print("MLEngine_ArrayChecksumEqual. Fail equality check when it was expected")
+        print("    hashName = " + hashName)
+        print("    weightMatrix = " + str(weightMatrix))
+        ASSERT_ERROR("MLEngine_ArrayChecksumEqual. Fail equality check when it was expected")
+
+    return isEqual
+# End - MLEngine_ArrayChecksumEqual
+
 
 
 
@@ -182,31 +314,27 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     #####################################################
     def __init__(self, job):
         super().__init__()
-        #print("MLEngine_SingleLayerNeuralNet::__init__")
 
         self.isLogistic = job.GetIsLogisticNetwork()
-        #print("__init__: self.isLogistic=" + str(self.isLogistic))
 
         inputNameListStr = job.GetNetworkInputVarNames()
         inputNameList = inputNameListStr.split(tdf.VARIABLE_LIST_SEPARATOR)
         self.NumInputVars = len(inputNameList)
-        #print("inputNameListStr=" + str(inputNameListStr))
-        #print("self.NumInputVars=" + str(self.NumInputVars))
 
         resultValueName = job.GetNetworkOutputVarName()
-        #print("resultValueName = " + resultValueName)
         if (self.isLogistic):
-            # The output is a single number that is the probability.
             self.NumOutputCategories = 1
         else:
             self.NumOutputCategories = tdf.TDF_GetNumClassesForVariable(resultValueName)
-        #print("MLEngine_SingleLayerNeuralNet.Constructor numOutputCategories = " + str(self.NumOutputCategories))
 
         # Create the matrix of weights.
         # A nn.Linear is an object that contains a matrix A and bias vector b
         # It is used to compute (x * A-transpose) + b
         #    where x is the input, which is a vector with shape (1 x self.NumInputVars)
         #    or x is alternatively described as (rows=1, colums=self.NumInputVars). 
+        #
+        # The values are initialized from U(−k,k)U(−k​,k​), where k=1in_featuresk=in_features
+        # The values are initialized from U(−k,k)U(−k​,k​) where k=1in_featuresk=in_features1​
         self.inputToOutput = nn.Linear(self.NumInputVars, self.NumOutputCategories)
 
         # Depending on the result value type, make a Non-linearity.
@@ -225,26 +353,20 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     # This will leave pointers for all of the dependencies, 
     # so backward propagation can be done by the base class.
     #####################################################
-    def forward(self, job, fIsTraining, inputMatrix, recurrentState, expectedOutputs):
-        # fIsTraining and expectedOutputs are IGNORED here. It is only used for XGBoost
-
+    def forward(self, job, inputMatrix):
         output = self.inputToOutput(inputMatrix)
 
         if (job.GetDebug()):
-            #job.RecordDebugVal(mlJob.DEBUG_EVENT_TIMELINE_LOSS, loss.data.item())
             job.RecordMatrixAsDebugVal(mlJob.DEBUG_EVENT_OUTPUT_AVG, 
                                         output.detach().numpy(), "Avg")
 
         if (self.outputNonLinearLayer is not None):
-            #print("MLEngine_SingleLayerNeuralNet.forward. Raw output = " + str(output))
             output = self.outputNonLinearLayer(output)
-            #print("MLEngine_SingleLayerNeuralNet.forward. Non-Linear output = " + str(output))
             if (job.GetDebug()):
-                #job.RecordDebugVal(mlJob.DEBUG_EVENT_TIMELINE_LOSS, loss.data.item())
                 job.RecordMatrixAsDebugVal(mlJob.DEBUG_EVENT_NONLINEAR_OUTPUT_AVG, 
                                                 output.detach().numpy(), "Avg")
 
-        return output, recurrentState
+        return output
     # End - forward
 
 
@@ -253,7 +375,22 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     # [MLEngine_SingleLayerNeuralNet.SaveNeuralNetstate]
     #####################################################
     def SaveNeuralNetstate(self, job):
+        fDebug = False
+
+        # Save the matrix itself to the job.
         MLEngine_SaveLinearUnitToJob(self.inputToOutput, job, "inputToOutput")
+
+        # Debug: Save a checksum of the first matrix
+        if (not job.ChecksumExists("SimInMatInit")):
+            MLEngine_SetArrayChecksum(job, self.inputToOutput, "SimInMatInit")
+        else:
+            if (MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimInMatInit", False)):
+                ASSERT_ERROR("Save a matrix checksum that is same as initial")
+
+        # Now save a checksum of the latest matrix.
+        MLEngine_SetArrayChecksum(job, self.inputToOutput, "SimpleNetInputMatrix")
+        if (not MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimpleNetInputMatrix", True)):
+            ASSERT_ERROR("Failed to save a matrix checksum")
     # End - SaveNeuralNetstate
 
 
@@ -264,21 +401,45 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     #
     #####################################################
     def RestoreNetState(self, job):
+        fDebug = False
+        if (fDebug):
+            print("MLEngine_SingleLayerNeuralNet.RestoreNetState")
+
+        # Read the matrix from the job
         restoredTensor = MLEngine_ReadLinearUnitFromJob(job, "inputToOutput")
+        # We always try to restore, so will also restore even on the first time
+        # we used the matrix. In that case, there is no saved state.
         if (restoredTensor is not None):
             self.inputToOutput = restoredTensor
+            if (not MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimpleNetInputMatrix", True)):
+                print("MLEngine_SingleLayerNeuralNet. Fail Assert. Failed to correctly restore a neural net state")
+                ASSERT_ERROR("Failed to save a matrix checksum: " + "inputToOutput")
     # End - RestoreNetState
 
 
     #####################################################
+    #
+    # MLEngine_SingleLayerNeuralNet.ValidateTrainingUpdate
+    #
+    # Make sure that backprop correctly updated the local network 
     #####################################################
-    def InitRecurrentState(self, sequenceSize):
-        return None
+    def ValidateTrainingUpdate(self, job, loss, predictionTensor, trueResultTensor):
+        fValid = True
 
-    #####################################################
-    #####################################################
-    def MoveRecurrentStateOnOffGPU(self, recurrentState, toGPU, gpuDevice):
-        return None
+        MLEngine_CheckArray(self.inputToOutput, "SimpleNetInputMatrix")
+
+        # The matrix should now be different than the previous state
+        if (MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimpleNetInputMatrix", False)):
+            ASSERT_ERROR("MLEngine_SingleLayerNeuralNet: Training did not update the weight matrix - Nonce=" + str(job.GetNonce()))
+
+        # Save a checksum of the new matrix state
+        MLEngine_SetArrayChecksum(job, self.inputToOutput, "SimpleNetInputMatrix")
+        if (not MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimpleNetInputMatrix", True)):
+            ASSERT_ERROR("Failed to save a matrix checksum")
+
+        return fValid
+    # End - ValidateTrainingUpdate
+
 
     #####################################################
     #####################################################
@@ -289,6 +450,50 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     #####################################################
     def GetInputWeights(self):
         return None
+
+    #####################################################
+    # MLEngine_SingleLayerNeuralNet.CheckState
+    #####################################################
+    def CheckState(self, job):
+        fDebug = False
+        fFail = False
+        errStr = ""
+        if (fDebug):
+            print("DebugSimpleNetJob")
+
+        if (self.inputToOutput is None):
+            print("Nonce = " + str(job.GetNonce()))
+            ASSERT_ERROR("Matrix is None")
+
+        MLEngine_CheckArray(self.inputToOutput, "SimpleNetInputMatrix")
+
+        #<><>
+        return
+        #<><>
+        if (job.GetNonce() <= 2):
+            return
+
+        if (job.ChecksumExists("SimInMatInit")):
+            if (MLEngine_ArrayChecksumEqual(job, self.inputToOutput, "SimInMatInit", False)):
+                errStr = "Save a matrix checksum that is same as initial"
+                fFail = True
+
+        if (fFail):
+            print("Nonce = " + str(job.GetNonce()))
+            ASSERT_ERROR(errStr)
+    # End - CheckState
+
+
+    #####################################################
+    # MLEngine_SingleLayerNeuralNet.DebugPrint
+    #####################################################
+    def DebugPrint(self):
+        weightMatrix = self.inputToOutput.weight.clone().detach().numpy()
+        biasVector = self.inputToOutput.bias.clone().detach().numpy()
+
+        print("Weight Matrix = " + str(weightMatrix))
+        print("biasVector = " + str(biasVector))
+    # End - DebugPrint
 
 # class MLEngine_SingleLayerNeuralNet(nn.Module):
 
@@ -301,10 +506,10 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
 
 ################################################################################
 # 
-# MLEngine_MultiLayerNeuralNet
+# MLEngine_DeepNeuralNet
 # 
 ################################################################################
-class MLEngine_MultiLayerNeuralNet(nn.Module):
+class MLEngine_DeepNeuralNet(nn.Module):
 
     #####################################################
     # Initialize the weight matrices
@@ -316,23 +521,26 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
     # and nn.ModuleList instead of list
     #####################################################
     def __init__(self, job):
+        fDebug = False
+
         super().__init__()
         err = E_NO_ERROR
 
         self.isLogistic = job.GetIsLogisticNetwork()
-
         inputNameListStr = job.GetNetworkInputVarNames()
         inputNameList = inputNameListStr.split(tdf.VARIABLE_LIST_SEPARATOR)
         self.NumInputVars = len(inputNameList)
 
         resultValueName = job.GetNetworkOutputVarName()
         self.NumOutputCategories = tdf.TDF_GetNumClassesForVariable(resultValueName)
-        #print(">>>>> self.NumOutputCategories = " + str(self.NumOutputCategories))
 
         # If the recurrent state size is 0, then this is a simple deep neural network.
         self.RecurrentStateSize = job.GetNetworkStateSize()
         self.IsRNN = (self.RecurrentStateSize > 0)
-        #print("self.RecurrentStateSize = " + str(self.RecurrentStateSize))
+        if (fDebug):
+            print("self.RecurrentStateSize = " + str(self.RecurrentStateSize))
+            print("self.IsRNN = " + str(self.IsRNN))
+            print("self.NumOutputCategories = " + str(self.NumOutputCategories))
 
         # Build the network
         self.NetworkLayers = []
@@ -340,7 +548,8 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
         layerNum = 0
 
         ################################
-        # Create the first network layer.
+        # Create the first network layer. This does some things differently
+        # than all other network layers
         layerSpecXML = job.GetNetworkLayerSpec("InputLayer")
         if (layerSpecXML is None):
             print("Cannot find first network layer")
@@ -352,13 +561,14 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
         if (self.IsRNN):
             inputSize = self.RecurrentStateSize + self.NumInputVars
 
-        err, newLayerImpl, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, 0, inputSize, False)
+        err, newLayerInfo, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, 
+                                                                       0, inputSize, False)
         if (err != E_NO_ERROR):
-            print("Error in MLEngine_MultiLayerNeuralNet::__init__")
+            print("Error in MLEngine_DeepNeuralNet::__init__")
             raise Exception()
 
         self.LinearUnitList.append(newLinearUnit)
-        self.NetworkLayers.append(newLayerImpl)
+        self.NetworkLayers.append(newLayerInfo)
         # Get ready to do the next layer
         layerNum += 1
         currentLayerInputSize = layerOutputSize
@@ -368,12 +578,12 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
         # Create each hidden layer
         layerSpecXML = job.GetNetworkLayerSpec("HiddenLayer")
         while (layerSpecXML is not None):
-            err, newLayerImpl, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, layerNum, 
-                                                                        currentLayerInputSize, False)
+            err, newLayerInfo, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, 
+                                                                 layerNum, currentLayerInputSize, False)
             if (err != E_NO_ERROR):
                 raise Exception()
 
-            self.NetworkLayers.append(newLayerImpl)
+            self.NetworkLayers.append(newLayerInfo)
             self.LinearUnitList.append(newLinearUnit)
 
             # Get ready to do the next layer
@@ -384,16 +594,18 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
 
 
         ################################
-        # Create the last layer
+        # Create the last layer.
+        # This may be complicated because it may take more than the previous layer's output
+        # as its inputs.
         layerSpecXML = job.GetNetworkLayerSpec("OutputLayer")
         if (layerSpecXML is None):
             raise Exception()
 
-        err, newLayerImpl, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, layerNum, 
-                                                currentLayerInputSize, True)
+        err, newLayerInfo, newLinearUnit, layerOutputSize = self.MakeOneNetworkLayer(layerSpecXML, 
+                                                               layerNum, currentLayerInputSize, True)
         if (err != E_NO_ERROR):
             raise Exception()
-        self.NetworkLayers.append(newLayerImpl)
+        self.NetworkLayers.append(newLayerInfo)
         self.LinearUnitList.append(newLinearUnit)
         self.NumLayers = layerNum + 1
 
@@ -408,6 +620,13 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
             outputSize = self.RecurrentStateSize
             self.rnnStateLinearUnit = nn.Linear(inputSize, outputSize)
         # End - if (self.IsRNN)
+
+        if (fDebug):
+            print("MLEngine_DeepNeuralNet.__init__")
+            print("   Len(self.LinearUnitList) = " + str(len(self.LinearUnitList)))
+            print("   Len(self.NetworkLayers) = " + str(len(self.NetworkLayers)))
+            print("   Num Params=" + str(len(list(self.parameters()))))
+            #print("   Params=" + str(list(self.parameters())))
     # End - __init__
 
 
@@ -428,9 +647,9 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
     #
     #####################################################
     def MakeOneNetworkLayer(self, layerSpecXML, layerNum, currentLayerInputSize, fIsFinalLayer):
-        #print("Reading network layer: " + str(layerNum))
-        newLayerImpl = {'layerNum': layerNum}
-        newLinearUnit = None
+        fDebug = False
+
+        newLayerInfo = {'layerNum': layerNum}
         newLinearUnit = None
 
         # Use the XML spec to create the next layer of the network
@@ -446,11 +665,25 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
             print("Invalid array size: " + str(layerOutputSize))
             return E_NO_ERROR, None, None, 0
 
-        newLayerImpl['LayerOutputSize'] = layerOutputSize
-        newLayerImpl['Name'] = "Vec" + str(layerNum) + "To" + str(layerNum + 1)
-        newLayerImpl['fIsFinalLayer'] = fIsFinalLayer
-        #print("MakeOneNetworkLayer. Layer " + str(layerNum) + " currentLayerInputSize=" + str(currentLayerInputSize))
-        #print("MakeOneNetworkLayer. Layer " + str(layerNum) + " layerOutputSize=" + str(layerOutputSize))
+        newLayerInfo['LayerOutputSize'] = layerOutputSize
+        newLayerInfo['Name'] = "Vec" + str(layerNum) + "To" + str(layerNum + 1)
+        newLayerInfo['fIsFinalLayer'] = fIsFinalLayer
+        newLayerInfo['MixAnalogDigital'] = dxml.XMLTools_GetChildNodeTextAsBool(layerSpecXML, 
+                                                            NETWORK_MIXED_ANALOG_DIGITAL_ELEMENT_NAME, 
+                                                            False)
+
+        if (newLayerInfo['MixAnalogDigital']):
+            origLayerInputSize = currentLayerInputSize
+            currentLayerInputSize += self.NumInputVars
+            if (fDebug):
+                print("Found Analog Layer!")
+                print("fIsFinalLayer = " + str(fIsFinalLayer))
+                print("New origLayerInputSize = " + str(origLayerInputSize))
+                print("New self.NumInputVars = " + str(self.NumInputVars))
+                print("New currentLayerInputSize = " + str(currentLayerInputSize))
+            # End - if (fDebug):
+        # End - if (newLayerInfo['MixAnalogDigital']):
+
 
         # Create the matrices of weights
         # A nn.Linear is an object that contains a matrix A and bias vector b
@@ -458,20 +691,30 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
         #    where x is the input, which is a vector with shape (1 x self.NumInputVars)
         #    or x is alternatively described as (rows=1, colums=self.NumInputVars). 
         #
+        # The values are initialized from U(−k,k), where k=in_features
+        #
         # Plain Python containers, such as list and dict won’t be properly registered 
-        # in a module class object
-        # As a result, they do not appear as Parameters, and so will not be part of the backprop
-        # or gradient updates. As a result, use nn.ModuleDict instead of dict 
-        # and nn.ModuleList instead of list
+        # in a module class object. As a result, they do not appear as Parameters, 
+        # and so will not be part of the backprop or gradient updates. 
+        # As a result, use nn.ModuleDict instead of dict and nn.ModuleList instead of list
         newLinearUnit = nn.Linear(currentLayerInputSize, layerOutputSize)
+
+        # Be careful.
+        # Consider just layer 1. Initially, after allocation, every node in layer 1 is identical.
+        # Each node is a combination of all inputs so they are all the same combination of the 
+        # same inputs. How do the channels ever differentiate?
+        # The constructor will randomly initialize all coefficients at the beginning?
 
         # Make the non-linear units between linear layers
         # Depending on the result value type, make a Non-linearity
         nonLinearTypeStr = dxml.XMLTools_GetChildNodeTextAsStr(layerSpecXML, "NonLinear", "ReLU").lower()
-        newLayerImpl['NonLinear'] = MLEngine_MakePyTorchNonLinear(nonLinearTypeStr, self.isLogistic, 
+        newLayerInfo['NonLinear'] = MLEngine_MakePyTorchNonLinear(nonLinearTypeStr, self.isLogistic, 
                                                                   fIsFinalLayer)
 
-        return E_NO_ERROR, newLayerImpl, newLinearUnit, layerOutputSize
+        # If a Linear Unit is not a direct attribute then we must make it a parameter explicitly.        
+        # self.register_parameter(None, param)
+
+        return E_NO_ERROR, newLayerInfo, newLinearUnit, layerOutputSize
     # End - MakeOneNetworkLayer
 
 
@@ -480,107 +723,132 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
 
     #####################################################
     #
-    # [MLEngine_MultiLayerNeuralNet.forward]
+    # [MLEngine_DeepNeuralNet.forward]
     #
     # Forward prop.
     # This will leave pointers for all of the dependencies, 
     # so backward propagation can be done by the base class.
     #####################################################
-    def forward(self, job, fIsTraining, inputMatrix, recurrentState, expectedOutputs):
-        # fIsTraining and expectedOutputs are IGNORED here. It is only used for XGBoost
+    def forward(self, job, inputMatrix):
+        fDebug = False
+
         vec = inputMatrix
         combinedInput = None
 
-        # If this is an RNN, then the first layer takes in a combined vector
-        # made from both the inputs and the recurrent state.
-        if (self.IsRNN):
-            combinedInput = torch.cat((inputMatrix, recurrentState), 1)
-            vec = combinedInput
-        # End - if (self.IsRNN):
-
         # The network will look like:
         #    Inputs -> [InputToVec1] -> Vec1
-        #                    -> [Vec1ToVec2] -> Vec2
-        #                    -> [Vec2ToOutput] -> outputs
-        #
-        # 0 is the layer that takes direct inputs, 
+        #                -> [Vec1ToVec2] -> Vec2
+        #                -> [Vec2ToOutput] -> outputs
+        # layer 0 takes direct inputs
         # layer self.NumLayers-1 is the last layer that provides outputs
-        for layerNum in range(self.NumLayers):
-            layerInfo = self.NetworkLayers[layerNum]
+        #
+        # We can do this with a single matrix operation for a simple Deep Network.
+        # However, if it is recurrent, then we need to generate the recurrent
+        # state from eack output K to be an input to K+1. As a result, we will
+        # have to do each column as a separate step.
+        ###########################################################
+        # Non-Recurrent Network - the simple case which does a single batch
+        if (not self.IsRNN):
+            for layerNum in range(self.NumLayers):
+                layerInfo = self.NetworkLayers[layerNum]
 
-            vec = self.LinearUnitList[layerNum](vec)
-            if (layerInfo['NonLinear'] is not None):
-                vec = layerInfo['NonLinear'](vec)
-        # End - for layerNum in range(self.NumLayers):
+                if (layerInfo['MixAnalogDigital']):
+                    analogPlusDigitalVector = torch.cat((vec, inputMatrix), 2)
+                    vec = analogPlusDigitalVector
+                # End - if (layerInfo['MixAnalogDigital']):
 
-        # If this is an RNN, then compute the next recurrent state
-        # This state can be computed as a function of different kinds of inputs, 
-        # such as:
-        # - Previous state, current inputs
-        # - Previous state, current inputs, current output
-        if (self.IsRNN):
-            combinedInput = torch.cat((combinedInput, vec), 1)
-            recurrentState = self.rnnStateLinearUnit(combinedInput)
-        # End - if (self.IsRNN):
+                vec = self.LinearUnitList[layerNum](vec)
+                if (layerInfo['NonLinear'] is not None):
+                    vec = layerInfo['NonLinear'](vec)
+            # End - for layerNum in range(self.NumLayers):
+        ###########################################################
+        # Recurrent Network - the slow case which does each input sequentially
+        else:   # if (not self.IsRNN):
+            # Reset the hidden state.
+            # This is used each time we start a new sequence of inputs
+            # Each sequence of inputs starts from an initial state.
+            # One training sequence does not convey any information about 
+            # another training sequence.
+            # As a result, the order we train the input sequences does not matter.
+            recurrentState = torch.zeros(self.RecurrentStateSize)
+            #recurrentState = recurrentState.to(gpuDevice)
+            #recurrentState = recurrentState.cpu()
 
-        return vec, recurrentState
+            numDataSamples = inputMatrix.shape[0]
+            resultList = torch.zeros(numDataSamples, 1, 1)
+            for inputVecNum in range(numDataSamples):
+                vec = inputMatrix[inputVecNum][0]
+
+                # The first layer takes in a combined vector
+                # made from both the inputs and the recurrent state.
+                vec = torch.cat((vec, recurrentState), 0)
+
+                # Pass through each layer
+                for layerNum in range(self.NumLayers):
+                    layerInfo = self.NetworkLayers[layerNum]
+
+                    if (layerInfo['MixAnalogDigital']):
+                        vec = torch.cat((vec, inputMatrix), 0)
+                    # End - if (layerInfo['MixAnalogDigital']):
+
+                    vec = self.LinearUnitList[layerNum](vec)
+                    if (layerInfo['NonLinear'] is not None):
+                        vec = layerInfo['NonLinear'](vec)
+                # End - for layerNum in range(self.NumLayers):
+
+                # Copy the whole tensor result, including its gradient
+                resultList[inputVecNum][0] = vec
+
+                # Compute the next recurrent state
+                combinedInput = torch.cat((recurrentState, inputMatrix[inputVecNum][0], vec), 0)
+                recurrentState = self.rnnStateLinearUnit(combinedInput)
+            # End - for inputVecNum in range(numDataSamples):
+
+            vec = resultList
+        # if (self.IsRNN):
+
+        return vec
     # End - forward
-
-
-
-    #####################################################
-    # Reset the hidden state.
-    # This is used each time we start a new sequence of inputs
-    # Each sequence of inputs starts from an initial state.
-    # One training sequence does not convey any information about 
-    # another training sequence.
-    # As a result, the order we train the input sequences does not matter.
-    #####################################################
-    def InitRecurrentState(self, sequenceSize):
-        if (self.IsRNN):
-            return torch.zeros(sequenceSize, self.RecurrentStateSize)
-        else:
-            return None
-    # End - InitRecurrentState
-
-
-
-    #####################################################
-    #####################################################
-    def MoveRecurrentStateOnOffGPU(self, recurrentState, toGPU, gpuDevice):
-        if (recurrentState is not None):
-            if (toGPU):
-                recurrentState = recurrentState.to(gpuDevice)
-            else:
-                recurrentState = recurrentState.cpu()
-
-        return recurrentState
-    # End - MoveRecurrentStateOnOffGPU
 
 
 
 
     #####################################################
     #
-    # [MLEngine_MultiLayerNeuralNet.SaveNeuralNetstate]
+    # [MLEngine_DeepNeuralNet.SaveNeuralNetstate]
     #
     #####################################################
     def SaveNeuralNetstate(self, job):
         fDebug = False
         if (fDebug):
-            print("MLEngine_MultiLayerNeuralNet.SaveNeuralNetstate")
+            print("MLEngine_DeepNeuralNet.SaveNeuralNetstate start. nonceNum = " + str(job.GetNonce()))
 
+        # Save the matrices to the job.
         # Layer 0 is the layer that takes direct inputs
         # Layer self.NumLayers-1 is the last layer that provides outputs
         for layerNum in range(self.NumLayers):
             layerInfo = self.NetworkLayers[layerNum]
-            if (fDebug):
-                print("MLEngine_MultiLayerNeuralNet.Save Tensor for layer " + str(layerNum) + ", " + layerInfo['Name'])
+
+            # Do the actual save
             MLEngine_SaveLinearUnitToJob(self.LinearUnitList[layerNum], job, layerInfo['Name'])
+
+            # Save a checksum of the matrix
+            checksumName = g_SaveChecksumPrefix + layerInfo['Name']
+            MLEngine_SetArrayChecksum(job, self.LinearUnitList[layerNum], checksumName)
+            # Make sure the save worked
+            if (not MLEngine_ArrayChecksumEqual(job, self.LinearUnitList[layerNum], checksumName, True)):
+                ASSERT_ERROR("MLEngine_DeepNeuralNet.SaveNeuralNetstate. Failed to save a matrix checksum: " + checksumName)
+        # End - for layerNum in range(self.NumLayers):
+
 
         # If this is an RNN, then save the linear unit for the RecurrentVector
         if (self.IsRNN):
             MLEngine_SaveLinearUnitToJob(self.rnnStateLinearUnit, job, RECURRENT_STATE_LINEAR_UNIT_NAME)
+
+            # Save the new checksum
+            MLEngine_SetArrayChecksum(job, self.rnnStateLinearUnit, g_SaveChecksumPrefix + RECURRENT_STATE_LINEAR_UNIT_NAME)
+            if (not MLEngine_ArrayChecksumEqual(job, self.rnnStateLinearUnit, g_SaveChecksumPrefix + RECURRENT_STATE_LINEAR_UNIT_NAME, True)):
+                ASSERT_ERROR("Failed to save a matrix checksum: " + RECURRENT_STATE_LINEAR_UNIT_NAME)
         # End - if (self.IsRNN):
     # End - SaveNeuralNetstate
 
@@ -589,33 +857,151 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
 
     #####################################################
     #
-    # [MLEngine_MultiLayerNeuralNet.RestoreNetState]
+    # [MLEngine_DeepNeuralNet.RestoreNetState]
     #
     #####################################################
     def RestoreNetState(self, job):
         fDebug = False
         if (fDebug):
-            print("MLEngine_MultiLayerNeuralNet.RestoreNetState")
+            print("MLEngine_DeepNeuralNet.RestoreNetState start. nonceNum = " + str(job.GetNonce()))
 
         # Layer 0 is the layer that takes direct inputs
         # Layer self.NumLayers-1 is the last layer that provides outputs
         for layerNum in range(self.NumLayers):
             layerInfo = self.NetworkLayers[layerNum]
+
             restoredTensor = MLEngine_ReadLinearUnitFromJob(job, layerInfo['Name'])
+
+            # We always try to restore, so will also restore even on the first time
+            # we used the matrix. In that case, there is no saved state, but that is not an error.
             if (restoredTensor is not None):
                 if (fDebug):
-                    print("MLEngine_MultiLayerNeuralNet.Restore Tensor for layer " + str(layerNum) + ", " + layerInfo['Name'])
+                    print("MLEngine_DeepNeuralNet.Restore Tensor for layer " + str(layerNum) + ", " + layerInfo['Name'])
                 self.LinearUnitList[layerNum] = restoredTensor
+
+                # Make sure the tensor we restored matches the checksum.
+                checksumName = g_SaveChecksumPrefix + layerInfo['Name']
+                if (not MLEngine_ArrayChecksumEqual(job, restoredTensor, checksumName, True)):
+                    print("MLEngine_DeepNeuralNet.RestoreNetState. Restored matrix does not match checksum: " + checksumName)
+                    print("     checksumName = " + str(checksumName))
+                    print("     layerNum = " + str(layerNum))
+                    ASSERT_ERROR("MLEngine_DeepNeuralNet.RestoreNetState. Restored matrix does not match checksum")
+            # End - if (restoredTensor is not None):
+        # End - for layerNum in range(self.NumLayers):
 
         # If this is an RNN, then restore the linear unit for the RecurrentVector
         if (self.IsRNN):
             restoredTensor = MLEngine_ReadLinearUnitFromJob(job, RECURRENT_STATE_LINEAR_UNIT_NAME)
             if (restoredTensor is not None):
                 if (fDebug):
-                    print("MLEngine_MultiLayerNeuralNet.Restore Tensor for RNN")
+                    print("MLEngine_DeepNeuralNet.Restore Recurrent State Tensor for RNN is None")
                 self.rnnStateLinearUnit = restoredTensor
+                if (not MLEngine_ArrayChecksumEqual(job, self.rnnStateLinearUnit, g_SaveChecksumPrefix + RECURRENT_STATE_LINEAR_UNIT_NAME, True)):
+                    ASSERT_ERROR("MLEngine_DeepNeuralNet.RestoreNetState. Failed to Restore RNN matrix checksum: " + RECURRENT_STATE_LINEAR_UNIT_NAME)
+            # End - if (restoredTensor is not None):
         # End - if (self.IsRNN):
     # End - RestoreNetState
+
+
+
+
+
+    #####################################################
+    #
+    # MLEngine_DeepNeuralNet.ValidateTrainingUpdate
+    #
+    # Make sure that backprop correctly updated the local network 
+    #####################################################
+    def ValidateTrainingUpdate(self, job, loss, predictionTensor, trueResultTensor):
+        fDebug = False
+        fVerbose = False
+        fValid = True
+        fAbortOnError = False
+        if (fDebug):
+            print("ValidateTrainingUpdate. Start")
+
+        #################
+        # Each matrix should now be different than its previous state
+        for layerNum in range(self.NumLayers):
+            layerInfo = self.NetworkLayers[layerNum]
+            fValid = MLEngine_CheckArray(self.LinearUnitList[layerNum], layerInfo['Name'])  # <><> Crash here
+            if (not fValid):
+                print("ValidateTrainingUpdate: Failing. name=" + str(layerInfo['Name']))
+                print("ValidateTrainingUpdate: Failing. self.NumInputVars=" + str(self.NumInputVars))
+                print("ValidateTrainingUpdate: Failing. self.NumOutputCategories=" + str(self.NumOutputCategories))
+                print("ValidateTrainingUpdate: Failing. self.NetworkLayers=" + str(self.NetworkLayers))
+                if (fAbortOnError):
+                    raise Exception()
+                return False
+
+            if (MLEngine_ArrayChecksumEqual(job, self.LinearUnitList[layerNum], layerInfo['Name'], False)):
+                paramList = list(self.parameters())
+                if (fVerbose):
+                    print("\n\nMLEngine_DeepNeuralNet.ValidateTrainingUpdate Error. Training did not update the weight matrix: " 
+                    + layerInfo['Name'] + ", Nonce=" + str(job.GetNonce()))
+                    print("   LayerNum=" + str(layerNum))
+                    print("   Num Params=" + str(len(paramList)))
+                    print("   Loss=" + str(loss))
+                    print("   predictionTensor=" + str(predictionTensor))
+                    print("   trueResultTensor=" + str(trueResultTensor))
+                    for printLayerNum in range(self.NumLayers):
+                        printLayerInfo = self.NetworkLayers[printLayerNum]
+                        print("Layer Param " + printLayerInfo['Name'] + ": " + str(paramList[printLayerNum]))
+                        print("Layer Param Grad " + printLayerInfo['Name'] + ": " + str(paramList[printLayerNum].grad))
+                    print("\n==========\n Params:")
+                    print(str(list(self.parameters())))
+                    ASSERT_ERROR("Training did not update the weight matrix: " + layerInfo['Name'] + ", Nonce=" + str(job.GetNonce()))
+                # End - if (fVerbose):
+            # End - if (MLEngine_ArrayChecksumEqual(job, self.LinearUnitList[layerNum], layerInfo['Name'])):
+        # End - for layerNum in range(self.NumLayers):
+
+        # If this is an RNN, then also check the linear unit for the RecurrentVector
+        if (self.IsRNN):
+            fValid = MLEngine_CheckArray(self.rnnStateLinearUnit, RECURRENT_STATE_LINEAR_UNIT_NAME)
+            if (not fValid):
+                print("ValidateTrainingUpdate: Failing. name=" + str(RECURRENT_STATE_LINEAR_UNIT_NAME))
+                if (fAbortOnError):
+                    raise Exception()
+                return False
+
+            if (MLEngine_ArrayChecksumEqual(job, self.rnnStateLinearUnit, RECURRENT_STATE_LINEAR_UNIT_NAME, False)):
+                # Do not panic here. The recurrent state seems to cycle through a few states, 
+                # particularly at the beginning.
+                if (False):
+                    weightMatrix = self.rnnStateLinearUnit.weight.detach().numpy()
+                    biasVector = self.rnnStateLinearUnit.bias.clone().detach().numpy()
+                    print("\n==========")
+                    print("Fail Assert. Params=" + str(list(self.parameters())))
+                    print("self.rnnStateLinearUnit=" + str(self.rnnStateLinearUnit))
+                    print("self.rnnStateLinearUnit=" + str(weightMatrix))
+                    print("Saved Checksum=" + str(job.GetSavedArrayChecksum(RECURRENT_STATE_LINEAR_UNIT_NAME)))
+                    print("New Checksum=" + str(job.ComputeArrayChecksum(weightMatrix)))
+                #print("Hmmm.... Training did not update the RNN weight matrix: " + RECURRENT_STATE_LINEAR_UNIT_NAME)
+                #ASSERT_ERROR("Training did not update the RNN weight matrix: " + RECURRENT_STATE_LINEAR_UNIT_NAME)
+        # End - if (self.IsRNN):
+
+
+        ###############
+        # Save a checksum of the new matrix state
+        # Layer 0 is the layer that takes direct inputs
+        # Layer self.NumLayers-1 is the last layer that provides outputs
+        for layerNum in range(self.NumLayers):
+            layerInfo = self.NetworkLayers[layerNum]
+            MLEngine_SetArrayChecksum(job, self.LinearUnitList[layerNum], layerInfo['Name'])
+            if (not MLEngine_ArrayChecksumEqual(job, self.LinearUnitList[layerNum], layerInfo['Name'], True)):
+                print("\n==========\nFail Assert. Params=" + str(list(self.parameters())) + "\n==============")
+                ASSERT_ERROR("Failed to save a matrix checksum: " + layerInfo['Name'])
+
+        # If this is an RNN, then save the linear unit for the RecurrentVector
+        if (self.IsRNN):
+            MLEngine_SetArrayChecksum(job, self.rnnStateLinearUnit, RECURRENT_STATE_LINEAR_UNIT_NAME)
+            if (not MLEngine_ArrayChecksumEqual(job, self.rnnStateLinearUnit, RECURRENT_STATE_LINEAR_UNIT_NAME, True)):
+                print("\n==========\nFail Assert. Params=" + str(list(self.parameters())) + "\n==============")
+                ASSERT_ERROR("Failed to save a matrix checksum: " + RECURRENT_STATE_LINEAR_UNIT_NAME)
+        # End - if (self.IsRNN):
+
+        return fValid
+    # End - ValidateTrainingUpdate
 
 
     #####################################################
@@ -628,7 +1014,34 @@ class MLEngine_MultiLayerNeuralNet(nn.Module):
     def GetInputWeights(self):
         return None
 
-# class MLEngine_MultiLayerNeuralNet(nn.Module):
+
+    #####################################################
+    #
+    # MLEngine_DeepNeuralNet.CheckState
+    #
+    #####################################################
+    def CheckState(self, job):
+        for layerNum in range(self.NumLayers):
+            layerInfo = self.NetworkLayers[layerNum]
+            MLEngine_CheckArray(self.LinearUnitList[layerNum], layerInfo['Name'])
+        # End - for layerNum in range(self.NumLayers):
+
+        # If this is an RNN, then also check the linear unit for the RecurrentVector
+        if (self.IsRNN):
+            MLEngine_CheckArray(self.rnnStateLinearUnit, RECURRENT_STATE_LINEAR_UNIT_NAME)
+        # End - if (self.IsRNN):
+    # End - CheckState
+
+
+    #####################################################
+    # MLEngine_DeepNeuralNet.DebugPrint
+    #####################################################
+    def DebugPrint(self):
+        return
+    # End - DebugPrint
+
+
+# class MLEngine_DeepNeuralNet(nn.Module):
 
 
 
@@ -697,43 +1110,6 @@ class MLEngine_LSTMNeuralNet(nn.Module):
 
 
     #####################################################
-    # Reset the hidden state.
-    # This is used each time we start a new sequence of inputs
-    # Each sequence of inputs starts from an initial state.
-    # One training sequence does not convey any information about 
-    # another training sequence.
-    # As a result, the order we train the input sequences does not matter.
-    #####################################################
-    def InitRecurrentState(self, sequenceSize):
-        h0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
-        c0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
-
-        return (h0, c0)
-    # End - InitRecurrentState
-
-
-    #####################################################
-    #####################################################
-    def MoveRecurrentStateOnOffGPU(self, recurrentState, toGPU, gpuDevice):
-        if (recurrentState is None):
-            return None
-
-        h0 = recurrentState[0]
-        c0 = recurrentState[1]
-        if (recurrentState):
-            if (toGPU):
-                h0 = h0.to(gpuDevice)
-                c0 = c0.to(gpuDevice)
-            else:
-                h0 = h0.cpu()
-                c0 = c0.cpu()
-
-        return (h0, c0)
-    # End - MoveRecurrentStateOnOffGPU
-
-
-
-    #####################################################
     #
     # [MLEngine_LSTMNeuralNet.forward]
     #
@@ -741,12 +1117,21 @@ class MLEngine_LSTMNeuralNet(nn.Module):
     # This will leave pointers for all of the dependencies, 
     # so backward propagation can be done by the base class.
     #####################################################
-    def forward(self, job, fIsTraining, inputMatrix, recurrentState, expectedOutputs):
+    def forward(self, job, inputMatrix):
         fDebug = False
 
-        # fIsTraining and expectedOutputs are IGNORED here. It is only used for XGBoost
         if (fDebug):
             print("Forward(): Original inputMatrix.size()=" + str(inputMatrix.size()))
+
+        # Reset the hidden state.
+        # This is used each time we start a new sequence of inputs
+        # Each sequence of inputs starts from an initial state.
+        # One training sequence does not convey any information about 
+        # another training sequence.
+        # As a result, the order we train the input sequences does not matter.
+        h0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
+        c0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
+        recurrentState = (h0, c0)
 
         # There is a bug, where the hidden state is modified in-place on
         # a forward(), which causes the backprop to fail because it thinks
@@ -801,7 +1186,7 @@ class MLEngine_LSTMNeuralNet(nn.Module):
             print("Forward(): finalOut.size()=" + str(finalOut.size()))
             print("FinalOut = " + str(finalOut))
 
-        return finalOut, recurrentState
+        return finalOut
     # End - forward
 
 
@@ -812,8 +1197,6 @@ class MLEngine_LSTMNeuralNet(nn.Module):
     #
     #####################################################
     def SaveNeuralNetstate(self, job):
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. Start")
-
         # Save to io.BytesIO buffer
         ioBuffer = io.BytesIO()
         torch.save(self.LSTM, ioBuffer)
@@ -823,17 +1206,8 @@ class MLEngine_LSTMNeuralNet(nn.Module):
         # Functions like stateBytes.decode("utf-8") do not work.
         stateStr = stateBytes.hex()
 
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateBytes=" + str(stateBytes))
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateBytes.type=" + str(type(stateBytes)))
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateBytes.len=" + str(len(stateBytes)))
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateStr.type=" + str(type(stateStr)))
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateStr.len=" + str(len(stateStr)))
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. stateStr=" + str(stateStr))
-
         job.SetNamedStateAsStr(LSTM_SAVED_STATE_NAME, stateStr)
         MLEngine_SaveLinearUnitToJob(self.HiddenToOutput, job, LSTM_LINEAR_UNIT_SAVED_STATE_NAME)
-
-        #print("MLEngine_LSTMNeuralNet.SaveNeuralNetstate. Done")
     # End - SaveNeuralNetstate
 
 
@@ -870,6 +1244,16 @@ class MLEngine_LSTMNeuralNet(nn.Module):
 
 
     #####################################################
+    # Make sure that backprop correctly updated the local network 
+    #####################################################
+    def ValidateTrainingUpdate(self, job, loss, predictionTensor, trueResultTensor):
+        fValid = True
+        ASSERT_ERROR("ValidateTrainingUpdate not implemented")
+        return fValid
+    # End - ValidateTrainingUpdate
+
+
+    #####################################################
     #####################################################
     def GetLibraryName(self):
         return("Pytorch")
@@ -879,413 +1263,17 @@ class MLEngine_LSTMNeuralNet(nn.Module):
     def GetInputWeights(self):
         return None
 
+    #####################################################
+    # DebugPrint
+    #####################################################
+    def DebugPrint(self):
+        return
+    # End - DebugPrint
+
 # class MLEngine_LSTMNeuralNet(nn.Module):
 
 
 
-
-
-
-################################################################################
-# 
-# MLEngine_XGBoostModel
-# 
-# This implements a single Linear unit with or without a non-linear.
-# It implements Logistics and also numeric outputs.
-################################################################################
-class MLEngine_XGBoostModel(nn.Module):
-
-    #####################################################
-    # Initialize the weight matrices
-    #####################################################
-    def __init__(self, job):
-        super().__init__()
-
-        self.BoostedTree = None
-
-        inputNameListStr = job.GetNetworkInputVarNames()
-        inputNameList = inputNameListStr.split(tdf.VARIABLE_LIST_SEPARATOR)
-        self.NumInputVars = len(inputNameList)
-
-        resultValueName = job.GetNetworkOutputVarName()
-        self.ResultType = tdf.TDF_GetVariableType(resultValueName)
-        self.NumOutputCategories = tdf.TDF_GetNumClassesForVariable(resultValueName)
-
-        self.isLogistic = job.GetIsLogisticNetwork()
-        if (self.ResultType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
-            self.IsClassifier = True
-        else:
-            self.IsClassifier = False
-        self.learningRate = float(job.GetTrainingParamStr("LearningRate", "0.1"))
-        self.numEpochs = job.GetTrainingParamInt("NumEpochs", 1)
-
-
-        ############################################
-        # Save the booster parameters.
-        # https://xgboost.readthedocs.io/en/stable/parameter.html
-        # https://xgboost.readthedocs.io/en/stable/tutorials/param_tuning.html
-        #
-        # objective [default=reg:squarederror]
-        # The Objective function. Possible options are:
-        #   reg:squarederror: regression with squared loss.
-        #   reg:squaredlogerror: regression with squared log loss. All input labels are 
-        #           required to be greater than -1. 
-        #   reg:logistic: logistic regression
-        #   reg:pseudohubererror: regression with Pseudo Huber loss, a twice differentiable
-        #           alternative to absolute loss.
-        #   binary:logistic: logistic regression for binary classification, output probability
-        #   binary:logitraw: logistic regression for binary classification, output score before
-        #           logistic transformation
-        #   binary:hinge: hinge loss for binary classification. This makes predictions of 0 or 1, 
-        #       rather than producing probabilities.
-        #   count:poisson –poisson regression for count data, output mean of Poisson distribution
-        #   survival:cox: Cox regression for right censored survival time data 
-        #   survival:aft: Accelerated failure time model for censored survival time data.
-        #   aft_loss_distribution: Probability Density Function used by survival:aft objective 
-        #       and aft-nloglik metric.
-        #   multi:softmax: set XGBoost to do multiclass classification using the softmax objective, 
-        #       you also need to set num_class(number of classes)
-        #   multi:softprob: same as softmax, but output a vector of ndata * nclass, which can be further 
-        #       reshaped to ndata * nclass matrix. The result contains predicted probability of 
-        #       each data point belonging to each class.
-        #   rank:pairwise: Use LambdaMART to perform pairwise ranking where the pairwise loss is minimized
-        #   rank:ndcg: Use LambdaMART to perform list-wise ranking
-        #   rank:map: Use LambdaMART to perform list-wise ranking
-        #   reg:gamma: gamma regression with log-link. Output is a mean of gamma distribution
-        #   reg:tweedie: Tweedie regression with log-link.
-        #
-        # Note, values that start with "reg" are designed for regression tasks.
-        #   values that start with "multi" are designed for classifier tasks.
-        #   values that start with "binary" are designed for boolean detector tasks.
-        #
-        # Do not use the job's loss string. The Pytorch loss functions do not correlate well
-        # with the  objective functions. Instead, use the output data type.
-        #lossTypeStr = job.GetTrainingParamStr("LossFunction", "").lower()
-        if (self.isLogistic):
-            self.XGBoostObjective = "binary:logistic"
-        elif (self.ResultType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-            self.XGBoostObjective = "reg:squarederror"
-        elif (self.ResultType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
-            self.XGBoostObjective = "multi:softmax"
-
-        # eta
-        # Step size shrinkage used in update to prevents overfitting
-        # It is a number between 0--1, defaults to 0.3
-        self.XGBoostETA = float(job.GetTrainingParamStr("XGBoostETA", "0.1"))
-
-        # max_depth
-        # Maximum depth of a tree. Increasing this value will make the model more complex and 
-        # more likely to overfit. Beware that XGBoost aggressively consumes memory when training a deep tree.
-        self.XGBoostMaxDepth = int(job.GetTrainingParamStr("XGBoostMaxDepth", "6"))
-
-        # lambda [default=1, alias: reg_lambda]
-        # L2 regularization term on weights. Increasing this value will make model more conservative.
-        self.XGBoostlambda = int(job.GetTrainingParamStr("XGBoostlambda", "1"))
-
-        # alpha [default=0, alias: reg_alpha]
-        # L1 regularization term on weights. Increasing this value will make model more conservative.
-        self.XGBoostAlpha = int(job.GetTrainingParamStr("XGBoostAlpha", "0"))
-
-        # tree_method string [default= auto]
-        # Taken from https://xgboost.readthedocs.io/en/stable/treemethod.html
-        #   The tree construction algorithm used in XGBoost. 
-        #   updater is more primitive than tree_method as tree_method is just a pre-configuration of updater
-        #   XGBoost has 4 builtin tree methods, namely exact, approx, hist and gpu_hist
-        #   exact:  During each split finding procedure, it iterates over all entries of input data. 
-        #       It’s more accurate (among other greedy methods) but slow in computation performance.
-        #   hist: An approximation tree method used in LightGBM with slight differences in implementation
-        #   gpu_hist: The gpu_hist tree method is a GPU implementation of hist
-        self.XGBoostTreeMethod = job.GetTrainingParamStr("XGBoostTreeMethod", "exact")
-
-        # updater [default= grow_colmaker,prune]
-        # A comma separated string defining the sequence of tree updaters to run, providing a modular 
-        # way to construct and to modify the trees. This is an advanced parameter that is 
-        #   usually set automatically, depending on some other parameters. 
-        #   However, it could be also set explicitly by a user. 
-        # The following updaters exist:
-        #    grow_colmaker: non-distributed column-based construction of trees.
-        #    grow_histmaker: distributed tree construction with row-based data splitting based on 
-        #       global proposal of histogram counting.
-        #    grow_local_histmaker: based on local histogram counting.
-        #    grow_quantile_histmaker: Grow tree using quantized histogram.
-        #    grow_gpu_hist: Grow tree with GPU.
-        #    sync: synchronizes trees in all distributed nodes.
-        #    refresh: refreshes tree’s statistics and/or leaf values based on the current data. 
-        #       Note that no random subsampling of data rows is performed.
-        #    prune: prunes the splits where loss < min_split_loss (or gamma) and nodes that 
-        #       have depth greater than max_depth.
-
-        # refresh_leaf [default=1]
-        # This is a parameter of the refresh updater. When this flag is 1, tree leafs as well 
-        # as tree nodes’ stats are updated. When it is 0, only node stats are updated.
-        #
-        # min_child_weight [default=1]
-        # max_delta_step [default=0] 
-        # subsample [default=1]
-        # sampling_method [default= uniform]
-        # colsample_bytree
-        # scale_pos_weight [default=1]
-        #   Control the balance of positive and negative weights, useful for unbalanced classes.
-        # grow_policy [default= depthwise] Controls a way new nodes are added to the tree.
-        #   Currently supported only if tree_method is set to hist or gpu_hist
-        # max_leaves [default=0]
-        #    Maximum number of nodes to be added. Only relevant when grow_policy=lossguide is set.
-        # max_bin, [default=256]
-        #    Only used if tree_method is set to hist or gpu_hist.
-        # predictor, [default=``auto``]
-        #    The type of predictor algorithm to use. Provides the same results but allows the use
-        #       of GPU or CPU.
-        # num_parallel_tree, [default=1]
-        #   Number of parallel trees constructed during each iteration. 
-        #   This option is used to support boosted random forest.
-        # monotone_constraints
-        #    Constraint of variable monotonicity. See tutorial for more information.
-        # interaction_constraints
-        #    Constraints for interaction representing permitted interactions.
-
-        #<> 4 is much faster
-        self.numThreadsInModel = 4
-    # End - __init__
-
-
-
-    #####################################################
-    #
-    # [MLEngine_XGBoostModel.forward]
-    #
-    # Forward prop.
-    # This will leave pointers for all of the dependencies, 
-    # so backward propagation can be done by the base class.
-    #####################################################
-    def forward(self, job, fIsTraining, inputNumPyMatrix, recurrentState, expectedOutputs):
-        fDebug = False
-        fShowPredictions = False
-        output = None
-
-        if (fDebug):
-            print("MLEngine_XGBoostModel.forward. self.IsClassifier=" + str(self.IsClassifier))
-            print("MLEngine_XGBoostModel.forward. inputNumPyMatrix.type=" + str(type(inputNumPyMatrix)))
-            print("MLEngine_XGBoostModel.forward. inputNumPyMatrix.size=" + str(inputNumPyMatrix.shape))
-            #print("MLEngine_XGBoostModel.forward. inputNumPyMatrix=" + str(inputNumPyMatrix))
-            if (expectedOutputs is not None):
-                print("MLEngine_XGBoostModel.forward. expectedOutputs.size=" + str(expectedOutputs.shape))
-                print("MLEngine_XGBoostModel.forward. expectedOutputs=" + str(expectedOutputs))
-
-        ##############################################
-        # If we are making a prediction during testing:
-        if (not fIsTraining):
-            # If there is no restored state, then we cannot do anything.
-            ASSERT_IF((self.BoostedTree is None), "No restored tree available during testing.")
-
-            if (self.IsClassifier):
-                output = self.BoostedTree.predict(inputNumPyMatrix)
-            else:
-                # Create Xgboost-specific DMatrix object from the numpy arrays
-                # This seems to expect a 2-dimensional matrix: Num Samples x Num Features
-                inputMatrix = xgb.DMatrix(inputNumPyMatrix)
-                output = self.BoostedTree.predict(inputMatrix)
-        # End - if (not fIsTraining):
-        ##############################################
-        # Otherwise, we are training, and we have an expected result.
-        else:
-            if (self.isLogistic):
-                params = {
-                    'learning_rate': self.learningRate,
-                    'max_depth': self.XGBoostMaxDepth,
-                    'objective': self.XGBoostObjective,  # Loss function
-                    'eta': self.XGBoostETA,  # Step size shrinkage
-                    'tree_method': self.XGBoostTreeMethod
-                    #'eval_metric': 'auc'
-                    }
-                #print("XGBoost - Logistic params = " + str(params))
-            elif (self.ResultType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
-                params = {
-                    #'learning_rate': self.learningRate. Do not use this; it breaks things.
-                    'max_depth': self.XGBoostMaxDepth,
-                    'objective': self.XGBoostObjective,  # Loss function
-                    'eta': 1,  # self.XGBoostETA, #Step size shrinkage
-                    'tree_method': self.XGBoostTreeMethod
-                    }
-                #print("XGBoost - Int params = " + str(params))
-            # if (self.ResultType == tdf.TDF_DATA_TYPE_BOOL or tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS)
-            # These are handled by explicit params to the xgb.XGBClassifier constructor, not a params
-            # dictionary
-
-            # For int and floats, we do not use the Classifier wrapper, so create 
-            # Xgboost-specific DMatrix object from the numpy arrays
-            # The inputs are a 2-dimensional matrix: Num Samples x Num Features
-            # The labels (the expected outputs) are a 1-dimensional matrix: Num Samples
-            if (not self.IsClassifier):
-                inputAndOutputMatrix = xgb.DMatrix(inputNumPyMatrix, label=expectedOutputs)
-
-            # If there is no restored state, then create the new model.
-            if (self.BoostedTree is None):
-                if (self.IsClassifier):
-                    # There is a bug in XGBClassifier. Do not pass num_class=2
-                    # If there are at most 2 different results, then XGBClassifier uses Loss: binary:logistic and
-                    # cannot handle a num_class parem, even if num_class=2
-                    # num_class=self.NumOutputCategories
-                    self.BoostedTree = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', num_class=2, objective="multi:softprob")
-                    self.BoostedTree.fit(inputNumPyMatrix, expectedOutputs)
-                else:
-                    self.BoostedTree = xgb.train(params, inputAndOutputMatrix, self.numEpochs)
-            # Otherwise, build the new model by extending the restored model
-            else:  # if (self.BoostedTree is NOT None):
-                # Process_type="Update" will only update existing trees, not create
-                # new trees. This is not desireable in my case, as it will stop further learning.
-                #params['verbosity'] = '0'
-                previousTree = self.BoostedTree
-                if (self.IsClassifier):
-                    # There is a bug in XGBClassifier. Do not pass num_class=2
-                    # If there are at most 2 different results, then XGBClassifier defaults to Loss: binary:logistic and
-                    # cannot handle a num_class parem, even if num_class=2. So, specify an objective other than
-                    # Logistic.
-                    #num_class=self.NumOutputCategories
-                    self.BoostedTree = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', num_class=2, objective="multi:softprob")
-                    self.BoostedTree.fit(inputNumPyMatrix, expectedOutputs, xgb_model=previousTree)
-                else:
-                    self.BoostedTree = xgb.train(params, inputAndOutputMatrix, self.numEpochs,
-                                                 xgb_model=previousTree)
-
-            # This is only used when we want to plot the predicted results during training.
-            # That is usefulf or debugging, to see that we predict different results that look plausible.
-            if (fShowPredictions or fDebug):
-                if (self.IsClassifier):
-                    output = self.BoostedTree.predict(inputNumPyMatrix.tolist())
-                else:
-                    inputMatrix = xgb.DMatrix(inputNumPyMatrix)
-                    output = self.BoostedTree.predict(inputMatrix)
-        # End - if (expectedOutputs is NOT None):
-
-        if ((fDebug or fShowPredictions) and (output is not None)):
-            print("MLEngine_XGBoostModel.forward. output.type=" + str(type(output)))
-            print("MLEngine_XGBoostModel.forward. output.size=" + str(output.shape))
-            print("MLEngine_XGBoostModel.forward. output=" + str(output))
-            lastOutputVal = output[len(output) - 1]
-            print("MLEngine_XGBoostModel.forward. fIsTraining=" + str(fIsTraining) + ", lastOutputVal=" + str(lastOutputVal))
-
-        return output, recurrentState
-    # End - forward
-
-
-
-    #####################################################
-    # [MLEngine_XGBoostModel.SaveNeuralNetstate]
-    #####################################################
-    def SaveNeuralNetstate(self, job):
-        fDebug = False
-        if (fDebug):
-            print("MLEngine_XGBoostModel.SaveNeuralNetstate")
-
-        # Do NOT panic here.
-        # This can happen when we do not call forward() on any patient in the partition.
-        # That can happen if there is no patient small enough for the partition or else
-        # if every patient has the same repetitious data and is skipped by data balancing.
-        if (self.BoostedTree is None):
-            if (fDebug):
-                print("MLEngine_XGBoostModel.SaveNeuralNetstate. Bail. BoostedTree is None")
-            return
-
-        # <> TODO
-        #save_raw(raw_format='deprecated')
-        #Save the model to a in memory buffer representation instead of file.
-        #Parameters
-        #raw_format (str) – Format of output buffer. Can be json, ubj or deprecated. Right now the default is deprecated 
-        #but it will be changed to ubj (univeral binary json) in the future.
-        #Return type
-        #An in memory buffer representation of the model
-
-        # Dump_model makes a text file, while save_model makes a binary file.
-        filePathName = job.MakeStateFilePathname("xgboost")
-        if (fDebug):
-            print("MLEngine_XGBoostModel.SaveNeuralNetstate - filePathName = " + str(filePathName))
-
-        self.BoostedTree.save_model(filePathName)
-        # There is also boostedTree.dump_model(fileName), which seems to make a human-readable
-        # printout, not used for restoring a tree.
-
-        job.SetNamedStateAsStr(mlJob.SAVED_STATE_TYPE_ELEMENT_NAME, "file")
-        job.SetNamedStateAsStr(mlJob.SAVED_STATE_FILE_PATH_ELEMENT_NAME, filePathName)
-    # End - SaveNeuralNetstate
-
-
-
-    #####################################################
-    #
-    # [MLEngine_XGBoostModel.RestoreNetState]
-    #
-    # A model that has been trained or loaded can compute predictions
-    #####################################################
-    def RestoreNetState(self, job):
-        fDebug = False
-
-        saveStateType = job.GetNamedStateAsStr(mlJob.SAVED_STATE_TYPE_ELEMENT_NAME, "").lower()
-        if (fDebug):
-            print("MLEngine_XGBoostModel.RestoreNetState. saveStateType=" + str(saveStateType))
-
-        ###############################
-        # An empty string is not an error, it just means there is no saved state
-        if (saveStateType == ""):
-            pass
-        ###############################
-        elif (saveStateType == "file"):
-            saveStateFilePathname = job.GetNamedStateAsStr(mlJob.SAVED_STATE_FILE_PATH_ELEMENT_NAME, "")
-            if (fDebug):
-                print("MLEngine_XGBoostModel.RestoreNetState. saveStateFilePathname=" + str(saveStateFilePathname))
-
-            if (not os.path.exists(saveStateFilePathname)):
-                saveStateFilePathname = job.MakeStateFilePathname("xgboost")
-                if (fDebug):
-                    print("MLEngine_XGBoostModel.RestoreNetState. Revised saveStateFilePathname=" + str(saveStateFilePathname))
-
-            if (fDebug):
-                print("MLEngine_XGBoostModel.RestoreNetState. saveStateFilePathname=" + str(saveStateFilePathname))
-
-            if ((saveStateFilePathname is not None) and (saveStateFilePathname != "")):
-                if (self.IsClassifier):
-                    self.BoostedTree = xgb.XGBClassifier(use_label_encoder=False, eval_metric='mlogloss')
-                else:
-                    self.BoostedTree = xgb.Booster()
-                self.BoostedTree.load_model(saveStateFilePathname)
-            else:
-                print("RestoreNetState ERROR! Bogus saveStateFilePathname: " + str(saveStateFilePathname))
-        # End - if (saveStateType == "file"):
-        ###############################
-        else:
-            print("RestoreNetState ERROR! Bogus saveStateType: " + str(saveStateType))
-    # End - RestoreNetState
-
-
-    #####################################################
-    #####################################################
-    def InitRecurrentState(self, sequenceSize):
-        return None
-
-    #####################################################
-    #####################################################
-    def MoveRecurrentStateOnOffGPU(self, recurrentState, toGPU, gpuDevice):
-        return None
-
-    #####################################################
-    #####################################################
-    def GetLibraryName(self):
-        return("XGBoost")
-
-    #####################################################
-    #####################################################
-    def GetInputWeights(self):
-        inputWtArray = self.BoostedTree.feature_importances_
-
-        #Available importance_types = [‘weight’, ‘gain’, ‘cover’, ‘total_gain’, ‘total_cover’]
-        #weight : The number of times a feature is used to split the data across all trees.
-        #cover : The number of times a feature is used to split the data across all trees weighted 
-        #   by the number of training data points that go through those splits.
-        #gain : The average training loss reduction gained when using a feature for splitting.
-        #xgb.get_booster().get_score(importance_type = 'gain')
-
-        return inputWtArray
-
-# class MLEngine_XGBoostModel(nn.Module):
 
 
 
@@ -1350,95 +1338,7 @@ def MLEngine_MakePyTorchNonLinear(nonLinearTypeStr, fIsLogistic, fIsFinalLayer):
 
 
 
-################################################################################
-#
-# [MLEngine_SaveLinearUnitToJob]
-#
-################################################################################
-def MLEngine_SaveLinearUnitToJob(linearUnit, job, name):
-    fDebug = False
-    if (fDebug):
-        print("MLEngine_SaveLinearUnitToJob")
 
-    # Make private copies so we do not affect future backprop.
-    weightMatrix = linearUnit.weight.detach().numpy()
-    biasVector = linearUnit.bias.detach().numpy()
-
-    job.SetLinearUnitMatrices(name, weightMatrix, biasVector)
-# End - MLEngine_SaveLinearUnitToJob
-
-
-
-
-
-################################################################################
-#
-# [MLEngine_ReadLinearUnitFromJob]
-#
-################################################################################
-def MLEngine_ReadLinearUnitFromJob(job, name):
-    fDebug = False
-
-    fFoundIt, weightMatrix, biasVector = job.GetLinearUnitMatrices(name)
-    if (not fFoundIt):
-        if (fDebug):
-            print("MLEngine_ReadLinearUnitFromJob. Error! Not found")
-        return None
-
-    weightTensor = torch.tensor(weightMatrix, dtype=torch.float32)
-    biasTensor = torch.tensor(biasVector, dtype=torch.float32)
-    weightSize = weightTensor.size()
-    inputSize = weightSize[1]
-    outputSize = weightSize[0]
-
-    linearUnit = nn.Linear(inputSize, outputSize)
-    linearUnit.weight = torch.nn.Parameter(weightTensor)
-    linearUnit.bias = torch.nn.Parameter(biasTensor)
-
-    return linearUnit
-# End - MLEngine_ReadLinearUnitFromJob
-
-
-
-
-################################################################################
-#
-# [MLEngine_PreflightGroupOfDataPoints]
-# 
-# Batch all data for a single patient.
-# Batching is more than speed - it is also the accurracy of the final result.
-# We are computing the loss as a function of the current weights, and the loss includes
-# the weights. So, if the weights have high variance, then the loss, and subsequentally
-# the future updates will have higher variance. Once variance is high, the system 
-# will oscillate and not smoothly converge.
-#
-# Since the batch is a single patient, then the batch size is small, usually 5-20.
-# As a result, I send them all in as a single minibatch, so there is only 1 minibatch
-# which is the original complete batch.
-#
-################################################################################
-def MLEngine_PreflightGroupOfDataPoints(job, inputArray, trueResultArray, numDataSamples):
-    fDebug = False
-    if (fDebug):
-        print("MLEngine_PreflightGroupOfDataPoints. numDataSamples=" + str(numDataSamples))
-        print("     inputArray=" + str(inputArray))
-        print("     trueResultArray=" + str(trueResultArray))
-        print("     Job Type = " + str(job.GetNetworkType().lower()))
-
-    # Preflight wants data in the form (NumSamples x NumFeatures)
-    arrayShape = inputArray.shape
-    numDimensions = len(arrayShape)
-    ASSERT_IF((numDimensions != 2), "MLEngine_PreflightGroupOfDataPoints. Bad array shape: " + str(arrayShape))
-    numSamples = arrayShape[0]
-    #numFeatures = arrayShape[1]
-    ASSERT_IF((numSamples != len(trueResultArray)), "MLEngine_PreflightGroupOfDataPoints. Bad trueResultArray len: " + str(len(trueResultArray)))
-
-    for sampleNum in range(numSamples):
-        inputVec = inputArray[sampleNum]
-        resultVal = trueResultArray[sampleNum]
-        job.PreflightData(inputVec, resultVal)
-    # End - for sampleNum in range(numSamples):
-# End - MLEngine_PreflightGroupOfDataPoints
 
 
 
@@ -1459,15 +1359,12 @@ def MLEngine_PreflightGroupOfDataPoints(job, inputArray, trueResultArray, numDat
 def MLEngine_NormalizeInputs(job, numDataSets, inputArray, fAddMinibatchDimension):
     fDebug = False
 
-    numInputVars, inputVarNameStemArray, inputTypeArray, preflightInputMins, preflightInputMaxs, preflightMeanInput = job.GetPreflightResults()
+    numInputVars, preflightInputMins, preflightInputRanges = job.GetPreflightResults()
     if (fDebug):
         print("MLEngine_NormalizeInputs. inputArray=" + str(inputArray))
         print("     numInputVars=" + str(numInputVars))
-        print("     inputVarNameStemArray=" + str(inputVarNameStemArray))
-        print("     inputTypeArray=" + str(inputTypeArray))
         print("     preflightInputMins=" + str(preflightInputMins))
-        print("     preflightInputMaxs=" + str(preflightInputMaxs))
-        print("     preflightMeanInput=" + str(preflightMeanInput))
+        print("     preflightInputRanges=" + str(preflightInputRanges))
 
     for sampleNum in range(numDataSets):
         if (fAddMinibatchDimension):
@@ -1476,24 +1373,22 @@ def MLEngine_NormalizeInputs(job, numDataSets, inputArray, fAddMinibatchDimensio
             inputVec = inputArray[sampleNum]
 
         for inputNum in range(numInputVars):
-            valueRange = preflightInputMaxs[inputNum] - preflightInputMins[inputNum]
-            if (valueRange == 0):
-                print("ERROR!!!! MLEngine_NormalizeInputs (valueRange == 0). inputNum=" + str(inputNum))
-                print("     preflightInputMaxs[inputNum]=" + str(preflightInputMaxs[inputNum]))
+            if (preflightInputRanges[inputNum] == 0):
+                print("ERROR!!!! MLEngine_NormalizeInputs (preflightInputRanges[inputNum] == 0). inputNum=" + str(inputNum))
+                print("     preflightInputRanges[inputNum]=" + str(preflightInputRanges[inputNum]))
                 print("     preflightInputMins[inputNum]=" + str(preflightInputMins[inputNum]))
-                #print("     valueRange=" + str(valueRange))
                 inputNameListStr = job.GetNetworkInputVarNames()
                 inputNameList = inputNameListStr.split(tdf.VARIABLE_LIST_SEPARATOR)
                 print("     inputName=" + str(inputNameList[inputNum]))
+                raise Exception()
                 normValue = 0
             else:                
                 diffFromMin = (inputVec[inputNum] - preflightInputMins[inputNum])
-                normValue = diffFromMin / valueRange
+                normValue = diffFromMin / preflightInputRanges[inputNum]
 
             if (fDebug):
                 print("MLEngine_NormalizeInputs. preflightInputMins[inputNum]=" + str(preflightInputMins[inputNum]))
-                print("     preflightInputMaxs[inputNum]=" + str(preflightInputMaxs[inputNum]))
-                print("     preflightMeanInput[inputNum]=" + str(preflightMeanInput[inputNum]))
+                print("     preflightInputRanges[inputNum]=" + str(preflightInputRanges[inputNum]))
                 print("     normValue=" + str(normValue))
 
             if (fAddMinibatchDimension):
@@ -1535,68 +1430,76 @@ def MLEngine_TrainGroupOfDataPoints(job, localNeuralNet, localLossFunction, loca
         print("MLEngine_TrainGroupOfDataPoints. numDataSamples=" + str(numDataSamples))
         print("trueResultArray = " + str(trueResultArray))
 
-    recurrentState = localNeuralNet.InitRecurrentState(numDataSamples)
-    if ((cudaIsAvailable) and (recurrentState is not None)):
-        recurrentState = localNeuralNet.MoveRecurrentStateOnOffGPU(recurrentState, True, gpuDevice)
+    localNeuralNet.CheckState(job)
 
+    #######################################
+    # Batch the entire matrix as a single batch, but use Pytorch
     if (fUsePytorch):
+        if (fDebug):
+            print("MLEngine_TrainGroupOfDataPoints. Original inputArray=" + str(inputArray))
+
+        # Normalize all inputs using the value from preflight
         inputArray = MLEngine_NormalizeInputs(job, numDataSamples, inputArray, fAddMinibatchDimension)
 
-    if (fUsePytorch):
+        if (fDebug):
+            print("MLEngine_TrainGroupOfDataPoints. Normalized inputArray=" + str(inputArray))
+
         # Convert numpy matrices to Pytorch Tensors
         inputTensor = torch.from_numpy(inputArray).float()
         trueResultTensor = torch.from_numpy(trueResultArray).float()
+
+        # Compare output and ground-truth target in the job.
+        # This is NOT a loss function, but rather it only updates job statistics.
+        for index in range(numDataSamples):
+            if (fAddMinibatchDimension):
+                inputVec = inputArray[index][0]
+                trueResult = trueResultArray[index][0][0]
+            else:
+                inputVec = inputArray[index]
+                trueResult = trueResultArray[index][0]
+            job.RecordTrainingSample(inputVec, trueResult)
+        # End - for index in range(numDataSamples):
+
+        if (fDebug):
+            print("MLEngine_TrainGroupOfDataPoints. inputTensor=" + str(inputTensor))
+
         if (cudaIsAvailable):
-            inputSize = inputTensor.size()
-            rnnDepth = inputSize[0]
-            if (rnnDepth >= MAX_RNN_DEPTH_WITH_GPU):
-                print("Error! Skip RNN data (too long for GPU), rnnDepth=" + str(rnnDepth))
-                return
+            print("Converting from CPU to GPU")
+            raise Exception()
             inputTensor = inputTensor.to(gpuDevice)
+            trueResultTensor = trueResultTensor.to(gpuDevice)
         # End - if (cudaIsAvailable):
 
-        output, recurrentState = localNeuralNet.forward(job, True, inputTensor, recurrentState, trueResultTensor)
-    # End - if (fUsePytorch):
-    else:  # if (not fUsePytorch):
-        if (fAddMinibatchDimension):
-            numVars = len(inputArray[0][0])
-        else:
-            numVars = len(inputArray[0])
-        mergedArray = np.concatenate([inputArray, trueResultArray], axis=1)
-        uniqueArray, _ = np.unique(mergedArray, axis=0, return_counts=True)
-        if (fAddMinibatchDimension):
-            slicedInput = uniqueArray[:, :, 0:numVars]
-            slicedResult = uniqueArray[:, :, numVars:numVars + 1]
-        else:
-            slicedInput = uniqueArray[:, 0:numVars]
-            slicedResult = uniqueArray[:, numVars:numVars + 1]
+        localNeuralNet.train()
+        localNeuralNet.CheckState(job)
+        output = localNeuralNet.forward(job, inputTensor)
+        localNeuralNet.CheckState(job)
 
-        output, recurrentState = localNeuralNet.forward(job, True, slicedInput, recurrentState, slicedResult)
-    # End - if (not fUsePytorch):
+        fIsValid = MLEngine_ValidateTensor(output)
+        if (not fIsValid):
+            print("ERROR! Bogus output")
+            print("   inputTensor = " + str(inputTensor))
+            print("   output = " + str(output))
+            print("   cudaIsAvailable = " + str(cudaIsAvailable))
+            localNeuralNet.CheckState(job)
+            raise Exception()
 
-    # Transfer the output back to the CPU so we can access the results
-    if ((cudaIsAvailable) and (output is not None)):
-        output = output.cpu()
+        # Transfer the output back to the CPU so we can access the results
+        if ((cudaIsAvailable) and (output is not None)):
+            print("Converting from CPU to GPU")
+            raise Exception()
+            output = output.cpu()
 
-    # Compare output and ground-truth target in the job.
-    # This is NOT a loss function, but rather it only updates job statistics.
-    for index in range(numDataSamples):
-        if (fAddMinibatchDimension):
-            inputVec = inputArray[index][0]
-            trueResult = trueResultArray[index][0][0]
-        else:
-            inputVec = inputArray[index]
-            trueResult = trueResultArray[index][0]
-        job.RecordTrainingSample(inputVec, trueResult)
-    # End - for index in range(numDataSamples):
+        if (fDebug):
+            print("MLEngine_TrainGroupOfDataPoints. output=" + str(output) + " inputTensor=" + str(inputTensor))
 
-    # Now, compare predicted outputs to the ground-truth targets and compute the 
-    # Loss (or Divergence or Div). This will also backpropagate and update the weights.
-    # SADLY, XGBoost does not seem to provide the computed outputs during training.
-    if (fUsePytorch):
+        # Now, compare predicted outputs to the ground-truth targets and compute the 
+        # Loss (or Divergence or Div). This will also backpropagate and update the weights.
         MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor, 
                                               localNeuralNet, localOptimizer,
                                               lossTypeStr, localLossFunction)
+        localNeuralNet.CheckState(job)
+    # End - if (fUsePytorch):
 # End - MLEngine_TrainGroupOfDataPoints
 
 
@@ -1610,43 +1513,38 @@ def MLEngine_TrainGroupOfDataPoints(job, localNeuralNet, localLossFunction, loca
 # 
 # This procedure is only called for Pytorch.
 ################################################################################
-def MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor, 
+def MLEngine_ComputeTrainingLossAndUpdate(job, predictionTensor, trueResultTensor, 
                                           localNeuralNet, localOptimizer,
                                           lossTypeStr, localLossFunction):
     fDebug = False
-
     if (fDebug):
         print("===================================================")
-        print("MLEngine_ComputeTrainingLossAndUpdate. output.size=" + str(output.size()))
-        print("     output=" + str(output))
+        print("MLEngine_ComputeTrainingLossAndUpdate. Start. predictionTensor.size=" + str(predictionTensor.size()))
+        print("     predictionTensor=" + str(predictionTensor))
         print("     trueResultTensor.size=" + str(trueResultTensor.size()))
         print("     trueResultTensor=" + str(trueResultTensor))
 
     # Compute the loss between the prediction and the actual result.
     # Initially:
-    #   output is a 3-d array: [ N, miniBatch=1, C ]
+    #   predictionTensor is a 3-d array: [ N, miniBatch=1, C ]
     #   trueResultTensor is a 3-d array: [ N, miniBatch=1, C ]
     # Where N is sequence size and C = number of classes
     # We may have to convert this for different loss functions.
 
     ##################
     # nllloss takes parameters:
-    #    output is (N,C) 
+    #    predictionTensor is (N,C) 
     #    trueResult (also called Target) which is (N)
     if (lossTypeStr == "nllloss"):
-        output = output[:, -1, :]
+        predictionTensor = predictionTensor[:, -1, :]
         trueResultTensor = trueResultTensor[:, -1, -1]
         trueResultTensor = trueResultTensor.long()
         if (fDebug):
             print("MLEngine_ComputeTrainingLossAndUpdate. nllloss")
-            print("MLEngine_ComputeTrainingLossAndUpdate. Modified output.size=" + str(output.size()))
-            print("MLEngine_ComputeTrainingLossAndUpdate. Modified output=" + str(output))
-            print("MLEngine_ComputeTrainingLossAndUpdate. Modified trueResultTensor.size=" + str(trueResultTensor.size()))
-            print("MLEngine_ComputeTrainingLossAndUpdate. Modified trueResultTensor=" + str(trueResultTensor))
     # End - if (lossTypeStr == "nllloss"):
     ##################
     # bceloss takes parameters:
-    #    output is (N, batch, C) 
+    #    predictionTensor is (N, batch, C) 
     #    trueResult (also called Target) is the same size: (N, batch, C)
     elif (lossTypeStr == "bceloss"):
         if (fDebug):
@@ -1654,7 +1552,7 @@ def MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor,
     # End - if (lossTypeStr == "bceloss"):
     ##################
     # L2 Loss (MSELoss) takes 2 matrices of the same size.
-    # output: (N,∗) where ∗*∗ means, any number of additional dimensions
+    # predictionTensor: (N,∗) where ∗*∗ means, any number of additional dimensions
     # actualResult (also called Target) (N,∗), same shape as the input
     elif (lossTypeStr == "l2loss"):
         if (fDebug):
@@ -1663,31 +1561,19 @@ def MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor,
     # The result of the LSTM forward pass has shape (sequenceSize, batchSize, vocabSize)
     # If this is not LSTM, then swap the middle and last column. This makes it 
     # (sequenceSize, batchSize, vocabSize)
-    #<>output = output.transpose(1, 2)
+    #<>predictionTensor = predictionTensor.transpose(1, 2)
 
-    if (fDebug):
-        print("MLEngine_ComputeTrainingLossAndUpdate. Ready for loss()")
-        print("     output.size=" + str(output.size()))
-        print("     output=" + str(output))
-        print("     trueResultTensor.size=" + str(trueResultTensor.size()))
-        print("     trueResultTensor=" + str(trueResultTensor))
-
-    loss = localLossFunction(output, trueResultTensor)
-    job.RecordDebugVal(mlJob.DEBUG_EVENT_TIMELINE_LOSS, loss.data.item())
+    loss = localLossFunction(predictionTensor, trueResultTensor)
 
     if (fDebug):
         print("MLEngine_ComputeTrainingLossAndUpdate. loss.size=" + str(loss.size()))
-        print("     loss=" + str(loss))
-        print("     loss.data=" + str(loss.data))
-        print("     loss.data.item()=" + str(loss.data.item()))
+        print("     loss=" + str(loss) + ",  loss.data=" + str(loss.data) + ", loss.data.item()=" + str(loss.data.item()))
 
     # Initialize the gradients to 0. This prevents gradients from any previous
     # data set (ie a patient) from influencing the learning for the current data set.
     if (localOptimizer is not None):
         localOptimizer.zero_grad()
-        localNeuralNet.zero_grad()  # <> ????? Do I need to do both?
-    else:
-        localNeuralNet.zero_grad()
+    localNeuralNet.zero_grad()
 
     # Back-propagate. 
     # This function generates the gradients.
@@ -1701,26 +1587,40 @@ def MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor,
         loss.backward(retain_graph=True)
     except Exception:  # cuDNN as err:
         print("!!! Error. Caught exception in backward()")
-        print("MLEngine_ComputeTrainingLossAndUpdate. output=" + str(output))
-        print("     output.size=" + str(output.size()))
-        print("     trueResultTensor.size=" + str(trueResultTensor.size()))
-        print("     loss.size=" + str(loss.size()))
+        print("     predictionTensor=" + str(predictionTensor))
         print("     loss=" + str(loss))
-        print("     loss.data=" + str(loss.data))
-        print("     loss.data.item()=" + str(loss.data.item()))
         ASSERT_ERROR("MLEngine_ComputeTrainingLossAndUpdate")
 
+    localNeuralNet.CheckState(job)
+
     if (localOptimizer is not None):
+        if (fDebug):
+            print("Call Optimizer step")
         localOptimizer.step()
     else:
-        learningRate = float(job.GetTrainingParamStr("LearningRate", "0.1"))
+        learningRate = float(job.GetTrainingParamStr(mlJob.TRAINING_OPTION_LEARNING_RATE, "0.1"))
+        if (fDebug):
+            print("No Optimizer. step=" + str(learningRate))
         with torch.no_grad():
             for currentParam in localNeuralNet.parameters():
                 if (currentParam.grad is not None):
-                    currentParam -= (learningRate * currentParam.grad)
+                    currentParam = currentParam - (learningRate * currentParam.grad)
     # End - Update matrices
 
+    localNeuralNet.CheckState(job)
+
+    # Debug - make sure that backprop correctly updated the local network 
+    fValid = localNeuralNet.ValidateTrainingUpdate(job, loss, predictionTensor, trueResultTensor)
+    if (not fValid):
+        print("\n\nBail in MLEngine_ComputeTrainingLossAndUpdate")
+        raise Exception()
+    job.IncrementNonce()
+
+    localNeuralNet.CheckState(job)
+
     job.RecordTrainingLoss(loss.data.item())
+
+    localNeuralNet.CheckState(job)
 # End - MLEngine_ComputeTrainingLossAndUpdate
 
 
@@ -1734,55 +1634,37 @@ def MLEngine_ComputeTrainingLossAndUpdate(job, output, trueResultTensor,
 # 
 ################################################################################
 def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvailable, gpuDevice,
-                                    inputArray, trueResultArray, numDataSamples, 
-                                    fAddMinibatchDimension, networkOutputDataType):
+                                   inputArray, trueResultArray, numDataSamples, 
+                                   fAddMinibatchDimension, networkOutputDataType):
     fDebug = False
     if (fDebug):
         print("\n==========================================")
         print("MLEngine_TestGroupOfDataPoints. numDataSamples=" + str(numDataSamples))
         print("     fUsePytorch=" + str(fUsePytorch))
 
-    if (fUsePytorch):
-        inputArray = MLEngine_NormalizeInputs(job, numDataSamples, inputArray, fAddMinibatchDimension)
+    if (not fUsePytorch):
+        return
+
+    # Normalize all inputs using the value from preflight
+    inputArray = MLEngine_NormalizeInputs(job, numDataSamples, inputArray, fAddMinibatchDimension)
 
     # Convert numpy matrices to Pytorch Tensors
-    if (fUsePytorch):
-        inputGroupSequenceTensor = torch.from_numpy(inputArray)
-        trueResultTensor = torch.from_numpy(trueResultArray)
-        inputGroupSequenceTensor = inputGroupSequenceTensor.float()
-        trueResultTensor = trueResultTensor.float()
+    inputGroupSequenceTensor = torch.from_numpy(inputArray).float()
+    trueResultTensor = torch.from_numpy(trueResultArray).float()
 
-    recurrentState = localNeuralNet.InitRecurrentState(numDataSamples)
-    if ((cudaIsAvailable) and (recurrentState is not None)):
-        recurrentState = localNeuralNet.MoveRecurrentStateOnOffGPU(recurrentState, True, gpuDevice)
+    # Transfer the input tensor to GPU. We transferred the recurrent state to the GPU
+    # once before the loop began.
+    if (cudaIsAvailable):
+        inputGroupSequenceTensor = inputGroupSequenceTensor.to(gpuDevice)
+        trueResultTensor = trueResultTensor.to(gpuDevice)
 
     with torch.no_grad():
-        # Transfer the input tensor to GPU. We transferred the recurrent state to the GPU
-        # once before the loop began.
-        if ((fUsePytorch) and (cudaIsAvailable)):
-            inputGroupSequenceTensor = inputGroupSequenceTensor.to(gpuDevice)
-
-        # We pass in a 2-dimensional tensor for the input. This eliminates the #sequenceNum
-        # So, we pass in (#batches x #features)
-        # This is essentially a 1-dimensional array, since the batch index is always 0.
-        # For XGboost, pass None for the trueResultArray. This tells forward() that we are 
-        # not training
-        if (fUsePytorch):
-            output, recurrentState = localNeuralNet.forward(job, False, inputGroupSequenceTensor, 
-                                                            recurrentState, trueResultArray)
-        else:
-            output, recurrentState = localNeuralNet.forward(job, False, inputArray, recurrentState, None)
+        output = localNeuralNet.forward(job, inputGroupSequenceTensor)
     # End - with torch.no_grad():
 
     # Transfer the output back to the CPU so we can access the results
     if (cudaIsAvailable):
         output = output.cpu()
-
-    if ((fUsePytorch) and (fDebug)):
-        print("MLEngine_TestGroupOfDataPoints. output.size=" + str(output.size()))
-        print("     output=" + str(output))
-        print("     trueResultTensor.size=" + str(trueResultTensor.size()))
-        print("     trueResultTensor=" + str(trueResultTensor))
 
     ASSERT_IF((output is None), "MLEngine_TestGroupOfDataPoints. output is None")
     predictedResultList = MLEngine_MakeListOfResults(job, output, numDataSamples, 
@@ -1800,6 +1682,14 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
 
         job.RecordTestingResult(trueResult, predictedResultList[index])
     # End - for index in range(numDataSamples):
+
+
+    # <><><><><><><><><> HACK 
+    # Question - Do we use every result or just the last result?????????
+    print("=============")
+    print("\n\nRNN BAIL! Inside MLEngine_TestGroupOfDataPoints")
+    raise Exception()
+    # <><><><><><><><><> HACK 
 # End - MLEngine_TestGroupOfDataPoints
 
 
@@ -1839,26 +1729,33 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
         return predictedResultList
     # End - if xgBoost and Categorical
 
-    predictedResultList = [0] * numDataSamples
 
     # Compare predicted outputs to the ground-truth targets.
-    for index in range(numDataSamples):
-        # In a logistic, we want the probability that an item is true, not the most likely.
-        # Note, a Boolean is a category result with two categories (0 and 1). But a Boolean
-        # that is also a logistic is a single floating point value between 0 and 1.
-        if (isLogistic):
-            if (fUsePytorch):
-                # Output is N x 1 x 1 where minibatch dim is 1 and there is also only 1 output, 
-                # which is the result of the sigmoid.
-                predictedResult = output[index][0][0].item()
-            else:
-                # Output is vector of length N, the result of the sigmoid.
-                predictedResult = output[index]
-            if (fDebug):
-                print("MLEngine_MakeListOfResults. Logistic Network predictedResult: " + str(predictedResult))
-        # End - if (isLogistic):
-        # A category output is a list of probabilities. Get the class ID with the top probability
-        elif (networkOutputDataType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
+    # An int or float output is just the number.
+    if (networkOutputDataType in (tdf.TDF_DATA_TYPE_FLOAT, tdf.TDF_DATA_TYPE_INT)):
+        if (fUsePytorch):
+            predictedResultList = output[:,0,0].tolist()
+        else:
+            predictedResultList = output.tolist()
+    # End - if (tdf.TDF_DATA_TYPE_FLOAT or tdf.TDF_DATA_TYPE_INT):
+    # In a logistic, we want the probability that an item is true, not the most likely.
+    # Note, a Boolean is a category result with two categories (0 and 1). But a Boolean
+    # that is also a logistic is a single floating point value between 0 and 1.
+    elif (isLogistic):
+        if (fUsePytorch):
+            # Output is N x 1 x 1 where minibatch dim is 1 and there is also only 1 output, 
+            # which is the result of the sigmoid.
+                predictedResultList[index] = output[:,0,0].tolist()
+        else:
+            # Output is vector of length N, the result of the sigmoid.
+            predictedResult = output.tolist()
+        if (fDebug):
+            print("MLEngine_MakeListOfResults. Logistic Network predictedResult: " + str(predictedResult))
+    # End - if (isLogistic):
+    # A category output is a list of probabilities. Get the class ID with the top probability
+    elif (networkOutputDataType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
+        predictedResultList = [0] * numDataSamples
+        for index in range(numDataSamples):
             if (fUsePytorch):
                 topProbability, topIndexTensor = output[index][0].topk(1)
                 predictedResult = topIndexTensor.item()
@@ -1873,17 +1770,10 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
                 predictedResult = mostProbableCategoryList[index]
                 if (fDebug):
                     print("MLEngine_MakeListOfResults. mostProbableCategoryList = " + str(mostProbableCategoryList))
-        # End - elif (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS or tdf.TDF_DATA_TYPE_BOOL)):
-        # An int or float output is just the number.
-        else:  # if ((tdf.TDF_DATA_TYPE_FLOAT) or (tdf.TDF_DATA_TYPE_INT)):
-            if (fUsePytorch):
-                predictedResult = output[index][0][0].item()
-            else:
-                predictedResult = output[index]
-        # End - if (tdf.TDF_DATA_TYPE_FLOAT or tdf.TDF_DATA_TYPE_INT):
+            predictedResultList[index] = predictedResult
+        # End - for index in range(numDataSamples):
+    # End - elif (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS or tdf.TDF_DATA_TYPE_BOOL)):
 
-        predictedResultList[index] = predictedResult
-    # End - for index in range(numDataSamples):
 
     if (fDebug):
         print("MLEngine_MakeListOfResults - predictedResultList: " + str(predictedResultList))
@@ -1897,12 +1787,10 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
 
 ################################################################################
 # 
-#
 # [MLEngine_PreflightOneFilePartitionImpl]
 #
 # This returns:
 #   job
-#   numPatientsProcessed
 #   fEOF - True iff we hit the end of the file
 #   startPosFirstPatientInPartition
 #   stopPosLastPatientInPartition
@@ -1914,151 +1802,64 @@ def MLEngine_PreflightOneFilePartitionImpl(job, currentPartitionStart, currentPa
     inputNameListStr = job.GetNetworkInputVarNames()
     resultValueName = job.GetNetworkOutputVarName()
     _, requirePropertyRelationList, requirePropertyNameList, requirePropertyValueList = job.GetFilterProperties()
-    startPosFirstPatientInPartition = -1
-    stopPosLastPatientInPartition = -1
     
+    job.StartPreflight()
+
     # Open the file in the worker process address space
     tdfReader = tdf.TDF_CreateTDFFileReader(tdfFilePathName, inputNameListStr, resultValueName, 
                                             requirePropertyNameList)
 
     # On Preflight, we will build the list of patient positions. Initialize this.
     patientPositionList = []
-
-    # Pytorch wants data (NumSamples x NumBatches x NumFeatures)
-    # XGBoost wants data (NumSamples x NumFeatures)
-    # Preflight wants data (NumSamples x NumFeatures)
-    fAddMinibatchDimension = False
-
-    # Get the first patient
-    startPatientPosInFile = -1
-    stopPatientPosInFile = -1
-    fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoFirstPatientInPartition(
-                                                                                     startPatientPosInFile, stopPatientPosInFile, 
-                                                                                     currentPartitionStart, currentPartitionStop)
-    #######################################
-    # This loop looks at each patient in the current partition
-    numPatientsProcessed = 0
-    while ((not fEOF) and (fFoundPatient)):
-        # On Preflight, we create a list of the patient locations as well as the valid boundaries of the partition.
-        # Record where we found the first patient. We will return this as the start of the first patient in the partition.
-        if (startPosFirstPatientInPartition < 0):
-            startPosFirstPatientInPartition = startPatientPosInFile
-
-        # We always save the stop of the patient, always overwriting the previour iteration.
-        # Eventually, on the last iteration, this will write this for the last time.
-        if (stopPatientPosInFile > 0):
-            stopPosLastPatientInPartition = stopPatientPosInFile
-        patientInfoDict = {'a': startPatientPosInFile, 'b': stopPatientPosInFile}
-        patientPositionList.append(patientInfoDict)
- 
-        # Get a sequence of data points for a single patient. 
-        numReturnedDataSets, inputArray, resultArray = tdfReader.GetDataForCurrentPatient(requirePropertyRelationList,
-                                                                            requirePropertyNameList,
-                                                                            requirePropertyValueList,
-                                                                            fAddMinibatchDimension,
-                                                                            False)  # fNormalize inmputs
-        if (numReturnedDataSets >= 1):
-            MLEngine_PreflightGroupOfDataPoints(job, inputArray, resultArray, numReturnedDataSets)
-            # Go to the next patient in this partition
-            numPatientsProcessed += 1
-        # End - if (numReturnedDataSets >= 1):
-
-        startPatientPosInFile = -1
-        stopPatientPosInFile = -1
-        if (not fEOF):
-            fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoNextPatientInPartition(startPatientPosInFile, 
-                                                                                                        stopPatientPosInFile, 
-                                                                                                        currentPartitionStop)
-    # End - while ((not fEOF) and (fFoundPatient)):
-
-    tdfReader.Shutdown()
-
-    return job, numPatientsProcessed, fEOF, startPosFirstPatientInPartition, stopPosLastPatientInPartition, patientPositionList
-# End - MLEngine_PreflightOneFilePartitionImpl
-
-
-
-
-
-
-################################################################################
-#
-# [MLEngine_TrainOneFilePartitionImpl]
-#
-# This returns:
-#   job
-#   numPatientsProcessed
-#   totalSkippedPatients
-#   numDataPointsProcessed
-#   fEOF - True iff we hit the end of the file
-#
-################################################################################
-def MLEngine_TrainOneFilePartitionImpl(job, currentPartitionStart, currentPartitionStop, 
-                                       localNeuralNet, localLossFunction, localOptimizer, 
-                                       fUsePytorch, cudaIsAvailable, gpuDevice):
-    fDebug = False
-    
-    tdfFilePathName = job.GetDataParam("TrainData", "")
-    inputNameListStr = job.GetNetworkInputVarNames()
-    resultValueName = job.GetNetworkOutputVarName()
-    _, requirePropertyRelationList, requirePropertyNameList, requirePropertyValueList = job.GetFilterProperties()
-    #batchSizeFromConfig = job.GetTrainingParamInt(mlJob.TRAINING_OPTION_BATCHSIZE, -1)
-
-    if (fDebug):
-        print("MLEngine_TrainOneFilePartitionImpl. currentPartitionStart = " + str(currentPartitionStart))
-        print("     currentPartitionStop = " + str(currentPartitionStop))
-
-    # Open the file in the worker process address space
-    tdfReader = tdf.TDF_CreateTDFFileReader(tdfFilePathName, inputNameListStr, resultValueName, 
-                                            requirePropertyNameList)
-
-    # Get some properties that are used for each training.
-    lossTypeStr = job.GetTrainingParamStr("LossFunction", "").lower()
-
-    # In some cases, we add a batches dimension to all data:
-    #   Pytorch wants data (NumSamples x NumBatches x NumFeatures)
-    #   XGBoost wants data (NumSamples x NumFeatures)
-    if (fUsePytorch):
-        fAddMinibatchDimension = True
-    else:
-        fAddMinibatchDimension = False
-
-  
-    ##############################
     # Make a list of patients in this file partition and group them by training priority.
     # We go through the classes in round robin, so first train a patient with priority 0, then
     # a patient in priority 1, and so on, until we reach the end and then go back to the beginning.
     # We iterate only while we can find one patient from each or most priorities.
     # We may not train all patients from the lowest priorities, because we do not want that to
     # overshadow the higher priorities. So, may not train all items from the more common classes.
-    job.StartPrioritizingTrainingSamplesInPartition()
     numTrainingPriorities = job.GetNumTrainingPriorities()
     # Warning! Dont use [ [] ] * PatientsForTrainingPriority
     # That makes a list containing the same sublist object numTrainingPriorities times
     PatientsForTrainingPriority = [ [] for _ in range(numTrainingPriorities) ]
-    #PatientsForTrainingPriority = []
-    #for index in range(numTrainingPriorities):
-    #   PatientsForTrainingPriority.append([])
 
 
+    #######################################
     # This loop looks at each patient in the current partition
     # Examine every patient and decide which result class it is in.
     # This is tricky - a single patient may have several different classes of result.
+    # Get the first patient
     startPatientPosInFile = -1
     stopPatientPosInFile = -1
+    startPosFirstPatientInPartition = -1
+    stopPosLastPatientInPartition = -1
     fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoFirstPatientInPartition(
-                                                                           startPatientPosInFile, stopPatientPosInFile, 
-                                                                           currentPartitionStart, currentPartitionStop)
+                                                                                    startPatientPosInFile, stopPatientPosInFile, 
+                                                                                    currentPartitionStart, currentPartitionStop,
+                                                                                    False)  # fOnlyFindPatientBoundaries
     while ((not fEOF) and (fFoundPatient)):
-        # Get a sequence of data points for a single patient. 
+        # On Preflight, we create a list of the patient locations as well as the valid boundaries of the partition.
+        # Record where we found the first patient. We will return this as the start of the first patient in the partition.
+        if (startPosFirstPatientInPartition < 0):
+            startPosFirstPatientInPartition = startPatientPosInFile
+        # We always save the stop of the patient, always overwriting the previour iteration.
+        # Eventually, on the last iteration, this will write this for the last time.
+        if (stopPatientPosInFile > 0):
+            stopPosLastPatientInPartition = stopPatientPosInFile
+
+        # Get a sequence of all data points for the current patient. 
         numReturnedDataSets, inputArray, resultArray = tdfReader.GetDataForCurrentPatient(requirePropertyRelationList,
                                                                         requirePropertyNameList,
                                                                         requirePropertyValueList,
                                                                         False,  # fAddMinibatchDimension
-                                                                        False)  # fNormalize inmputs
-        #######################################
+                                                                        False)  # fNormalize inputs
         if (numReturnedDataSets >= 1):
             numSamples = inputArray.shape[0]
+
+            for sampleNum in range(numSamples):
+                inputVec = inputArray[sampleNum]
+                resultVal = resultArray[sampleNum]
+                job.PreflightData(inputVec, resultVal)
+            # End - for sampleNum in range(numSamples):
 
             # This is tricky - a single patient may have several different classes of result.
             # We consider the patient to be in its most rare class.
@@ -2073,76 +1874,130 @@ def MLEngine_TrainOneFilePartitionImpl(job, currentPartitionStart, currentPartit
             if (trainingPriority >= 0):
                 patientInfoDict = {"a": startPatientPosInFile, "b": stopPatientPosInFile}
                 PatientsForTrainingPriority[trainingPriority].append(patientInfoDict)
+                patientPositionList.append(patientInfoDict)
             # if (trainingPriority >= 0):
         # End - if (numReturnedDataSets >= 1)
 
         # Go to the next patient
         startPatientPosInFile = -1
         stopPatientPosInFile = -1
-        if (not fEOF):
-            fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoNextPatientInPartition(
-                                                                                                        startPatientPosInFile, 
+        fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoNextPatientInPartition(startPatientPosInFile, 
                                                                                                         stopPatientPosInFile, 
-                                                                                                        currentPartitionStop)
+                                                                                                        currentPartitionStop,
+                                                                                                        False)  # fOnlyFindPatientBoundaries
     # End - while ((not fEOF) and (fFoundPatient)):
+
+    job.FinishPreflight()
+    tdfReader.Shutdown()
+
+    return job, fEOF, startPosFirstPatientInPartition, stopPosLastPatientInPartition, patientPositionList, PatientsForTrainingPriority
+# End - MLEngine_PreflightOneFilePartitionImpl
+
+
+
+
+
+
+################################################################################
+#
+# [MLEngine_TrainOneFilePartitionImpl]
+#
+# This returns several results:
+#   job
+#   numPatientsProcessed
+#   totalSkippedPatients
+#   numDataPointsProcessed
+#   fEOF - True iff we hit the end of the file
+#
+################################################################################
+def MLEngine_TrainOneFilePartitionImpl(job, currentPartitionStart, currentPartitionStop, 
+                                       localNeuralNet, localLossFunction, localOptimizer, 
+                                       fUsePytorch, cudaIsAvailable, gpuDevice, patientsForTrainingPriority):
+    fDebug = False
+    
+    tdfFilePathName = job.GetDataParam("TrainData", "")
+    inputNameListStr = job.GetNetworkInputVarNames()
+    resultValueName = job.GetNetworkOutputVarName()
+    _, requirePropertyRelationList, requirePropertyNameList, requirePropertyValueList = job.GetFilterProperties()
+    if (fDebug):
+        print("MLEngine_TrainOneFilePartitionImpl. currentPartitionStart = " + str(currentPartitionStart))
+        print("     currentPartitionStop = " + str(currentPartitionStop))
+
+    # Open the file in the worker process address space
+    tdfReader = tdf.TDF_CreateTDFFileReader(tdfFilePathName, inputNameListStr, resultValueName, 
+                                            requirePropertyNameList)
+
+    # Get some properties that are used for each training.
+    lossTypeStr = job.GetTrainingParamStr("LossFunction", "").lower()
+
+    # In some cases, we add a batches dimension to all data:
+    #   Pytorch wants data (NumSamples x NumBatches x NumFeatures)
+    #   XGBoost wants data (NumSamples x NumFeatures)
+    fAddMinibatchDimension = True
+ 
+    # Compute the list lengths.
+    numTrainingPriorities = job.GetNumTrainingPriorities()
+    NumPatientsAtEachPriority = [0] * numTrainingPriorities
+    maxNumPtsAtAnyPriority = 0
+    for index in range(numTrainingPriorities):
+        patientList = patientsForTrainingPriority[index]
+        numPatientsAtCurrentPriority = len(patientList)
+        NumPatientsAtEachPriority[index] = numPatientsAtCurrentPriority
+        if (numPatientsAtCurrentPriority >= maxNumPtsAtAnyPriority):
+            maxNumPtsAtAnyPriority = numPatientsAtCurrentPriority
+    # End - for index in range(numTrainingPriorities):
 
 
     # Randomize each of the patient lists
     for index in range(numTrainingPriorities):
-        patientList = PatientsForTrainingPriority[index]
+        patientList = patientsForTrainingPriority[index]
         random.shuffle(patientList)
-        PatientsForTrainingPriority[index] = patientList
+        patientsForTrainingPriority[index] = patientList
+    # End - for index in range(numTrainingPriorities):
 
 
     # Now, train one patient from each level of data priority.
-    # The more rare results are higher priority
+    # The more rare results are higher priority which is a lower index.
+    # So, priority 0 is the highest priority and most rare.
     numPatientsProcessed = 0
     numDataPointsProcessed = 0
-    patientIndexAtEachPriority = 0
-    tooManySkippedClasses = job.GetMaxSkippedTrainingPriorities()
-    while (True):
-        numSkippedClasses = 0
+    for patientIndexAtEachPriority in range(maxNumPtsAtAnyPriority):
+        numPrioritiesProcessed = 0
         for priorityLevel in range(numTrainingPriorities):
-            ptList = PatientsForTrainingPriority[priorityLevel]
-            if (patientIndexAtEachPriority < len(ptList)):
+            ptList = patientsForTrainingPriority[priorityLevel]
+            if (patientIndexAtEachPriority < NumPatientsAtEachPriority[priorityLevel]):                
                 patientInfo = ptList[patientIndexAtEachPriority]
-                tdfReader.GotoNextPatientInPartition(patientInfo["a"], patientInfo["b"], -1)
+                numPrioritiesProcessed += 1
+
+                tdfReader.GotoNextPatientInPartition(patientInfo["a"], patientInfo["b"], -1, False)
                 numReturnedDataSets, inputArray, resultArray = tdfReader.GetDataForCurrentPatient(requirePropertyRelationList,
                                                                                 requirePropertyNameList,
                                                                                 requirePropertyValueList,
                                                                                 fAddMinibatchDimension,
-                                                                                False)  # fNormalize inmputs)
+                                                                                False)  # fNormalizeInputs)
                 if (numReturnedDataSets >= 1):
+                    localNeuralNet.CheckState(job)
                     MLEngine_TrainGroupOfDataPoints(job, localNeuralNet, localLossFunction, localOptimizer, 
                                                     lossTypeStr, fUsePytorch, cudaIsAvailable, gpuDevice,
                                                     inputArray, resultArray, 
                                                     numReturnedDataSets, fAddMinibatchDimension)
+                    localNeuralNet.CheckState(job)
+
                     numPatientsProcessed += 1
                     numDataPointsProcessed += numReturnedDataSets
                 # if (numReturnedDataSets >= 1):
-            # End - if (patientIndexAtEachPriority < len(ptList)):
-            else:
-                numSkippedClasses += 1
+            # End - if (patientIndexAtEachPriority < NumPatientsAtEachPriority[priorityLevel]):
         # End - for priorityLevel in range(numTrainingPriorities):
 
-        if (numSkippedClasses >= tooManySkippedClasses):
+        # Stop processing patients when all the remaining patients are at the same priority
+        if (numPrioritiesProcessed <= 1):
             break
-        patientIndexAtEachPriority += 1
-    # End - while (True):
+    # End - for patientIndexAtEachPriority in range(maxNumPtsAtAnyPriority):
 
     tdfReader.Shutdown()
+    localNeuralNet.CheckState(job)
 
-
-    # Just for kicks and grins, count how many patients we skipped.
-    totalSkippedPatients = 0
-    for priorityLevel in range(numTrainingPriorities):
-        ptList = PatientsForTrainingPriority[priorityLevel]
-        if (patientIndexAtEachPriority < len(ptList)):
-            totalSkippedPatients += (len(ptList) - patientIndexAtEachPriority)
-    # End - for priorityLevel in range(numTrainingPriorities):
-
-
-    return job, numPatientsProcessed, totalSkippedPatients, numDataPointsProcessed, fEOF
+    return job, numPatientsProcessed, numDataPointsProcessed
 # End - MLEngine_TrainOneFilePartitionImpl
 
 
@@ -2185,7 +2040,7 @@ def MLEngine_TestOneFilePartitionImpl(job, currentPartitionStart, currentPartiti
     # Unlike training, the order does not matter. The arrays are not changing
     # and We compute the accuracy for every patient, no matter the order.
     numPatientsProcessed = 0
-    fFoundPatient, fEOF, _, _ = tdfReader.GotoFirstPatientInPartition(-1, -1, currentPartitionStart, currentPartitionStop)
+    fFoundPatient, fEOF, _, _ = tdfReader.GotoFirstPatientInPartition(-1, -1, currentPartitionStart, currentPartitionStop, False)
     while ((not fEOF) and (fFoundPatient)):
         # Get all data points for a single patient. 
         numReturnedDataSets, inputArray, resultArray = tdfReader.GetDataForCurrentPatient(requirePropertyRelationList,
@@ -2203,7 +2058,7 @@ def MLEngine_TestOneFilePartitionImpl(job, currentPartitionStart, currentPartiti
 
         # Go to the next patient in this partition
         numPatientsProcessed += 1
-        fFoundPatient, fEOF, _, _ = tdfReader.GotoNextPatientInPartition(-1, -1, currentPartitionStop)
+        fFoundPatient, fEOF, _, _ = tdfReader.GotoNextPatientInPartition(-1, -1, currentPartitionStop, False)
     # End - while ((not fEOF) and (fFoundPatient)):
 
     tdfReader.Shutdown()
@@ -2226,12 +2081,10 @@ def MLEngine_CreateNeuralNetFromJobSpec(job):
     valStr = job.GetNetworkType().lower()
     if (valStr == "simplenet"):
         localNeuralNet = MLEngine_SingleLayerNeuralNet(job)
-    elif (valStr == "multilevelnet"):
-        localNeuralNet = MLEngine_MultiLayerNeuralNet(job)
+    elif ((valStr == "deepnet") or (valStr == "multilevelnet")):
+        localNeuralNet = MLEngine_DeepNeuralNet(job)
     elif (valStr == "lstm"):
         localNeuralNet = MLEngine_LSTMNeuralNet(job)
-    elif (valStr == "xgboost"):
-        localNeuralNet = MLEngine_XGBoostModel(job)
     else:
         return None
 
@@ -2311,8 +2164,7 @@ def MLEngine_CreateLossFunctionForJob(job):
 ################################################################################
 def MLEngine_ReturnResultsFromChildProcess(sendPipeEnd, job, numPatientsProcessed, numSkippedPatients, numDataPointsProcessed,
                                             fEOF, startPosFirstPatientInPartition, stopPosLastPatientInPartition, 
-                                            err,
-                                            patientPositionList):
+                                            err, patientPositionList):
     resultDict = {'jobStr': "", 
                 'numPatientsProcessed': numPatientsProcessed, 
                 'numSkippedPatients': numSkippedPatients,
@@ -2334,60 +2186,6 @@ def MLEngine_ReturnResultsFromChildProcess(sendPipeEnd, job, numPatientsProcesse
 
 
 
-################################################################################
-#
-# [MLEngine_PreflightOneFilePartitionInChildProcess]
-#
-# This runs in a worker process, which may be another process on the same machine
-# or else a process on a remote server on the network.
-# All inputs and outputs are passed as strings and integers.
-# The job is serialized/deserialized as a string of XML text, so it can be passed
-# as a parameter string, modified, then returned as a result string.
-################################################################################
-def MLEngine_PreflightOneFilePartitionInChildProcess(sendPipeEnd, jobStr, 
-                                        partitionStartPosition, partitionStopPosition):
-    #print("MLEngine_PreflightOneFilePartitionInChildProcess start.")
-    #print("partitionStartPosition = " + str(partitionStartPosition))
-    #print("partitionStopPosition = " + str(partitionStopPosition))
-    global g_ChildProcessPipe
-    g_ChildProcessPipe = sendPipeEnd
-
-    # Regenerate the runtime job object from its serialized string form. 
-    job = mlJob.MLJob_CreateMLJobFromString(jobStr)
-
-    # This will overwrite patientPositionList.
-    job, numPatientsProcessed, fEOF, startPosFirstPatient, stopPosLastPatient, patientPositionList = MLEngine_PreflightOneFilePartitionImpl(job, 
-                                                                    partitionStartPosition, partitionStopPosition)
-
-    # We build up a list of patient positions during preflight.
-    # We reuse this list on all training epochs to quickly load patients.
-    patientPositionListStr = json.dumps(patientPositionList)
-    
-    # Send the results back to the control process.
-    MLEngine_ReturnResultsFromChildProcess(sendPipeEnd, job, numPatientsProcessed, 0, 0, fEOF, 
-                                           startPosFirstPatient, stopPosLastPatient,
-                                           E_NO_ERROR, patientPositionListStr)
-    ASSERT_IF((patientPositionListStr == ""), 
-            "MLEngine_PreflightOneFilePartitionInChildProcess. BAD Patient Position List: " + str(patientPositionListStr))
-
-    if (False):
-        print("Num VancDoses Found During Parsing = " + str(tdf.TDF_GetDebugVal("ParsedVancDose")))
-        print("      Num VancDoses Found Step 1 = " + str(tdf.TDF_GetDebugVal("FetchStep1VancDoses")))
-        print("      Num VancDoses Found Step 2 = " + str(tdf.TDF_GetDebugVal("FetchStep2VancDoses")))
-        print("      Num VancDoses Found Step 3 = " + str(tdf.TDF_GetDebugVal("FetchStep3VancDoses")))
-        print("Num VancLevels Found During Parsing = " + str(tdf.TDF_GetDebugVal("ParsedVancLvl")))
-        print("      Num VancLevels Found Step 1 = " + str(tdf.TDF_GetDebugVal("FetchStep1VancLvl")))
-        print("      Num VancLevels Found Step 2 = " + str(tdf.TDF_GetDebugVal("FetchStep2VancLvl")))
-        print("      Num VancLevels Found Step 3 = " + str(tdf.TDF_GetDebugVal("FetchStep3VancLvl")))
-        print("      Num VancLevels Found Step 4 = " + str(tdf.TDF_GetDebugVal("FetchStep4VancLvl")))
-
-    # Return and exit the process.
-# End - MLEngine_PreflightOneFilePartitionInChildProcess
-
-
-
-
-
 
 ################################################################################
 #
@@ -2399,11 +2197,16 @@ def MLEngine_PreflightOneFilePartitionInChildProcess(sendPipeEnd, jobStr,
 # The job is serialized/deserialized as a string of XML text, so it can be passed
 # as a parameter string, modified, then returned as a result string.
 ################################################################################
-def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
-                                                currentPartitionStart, currentPartitionStop):
+def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr,
+                                            currentPartitionStart, currentPartitionStop,
+                                            patientsForTrainingPriorityStr):
     global g_ChildProcessPipe
     g_ChildProcessPipe = sendPipeEnd
+    totalSkippedPatients = 0
     fDebug = False
+
+    #<> Debugging Only!
+    torch.autograd.set_detect_anomaly(True)
 
     if (fDebug):
         print("MLEngine_TrainOneFilePartitionInChildProcess start.")
@@ -2414,11 +2217,15 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
     # Regenerate the runtime job object from its serialized string form. 
     job = mlJob.MLJob_CreateMLJobFromString(jobStr)
 
-    job.RecordDebugEvent(mlJob.DEBUG_EVENT_TIMELINE_CHUNK)
+    # Convert other strings passed accross address spaces to a runtime data structure.
+    patientsForTrainingPriority = json.loads(patientsForTrainingPriorityStr)
 
-    fAllowMultiplePartitions = True
-    if (not job.TrainingCanPauseResume()):
-        fAllowMultiplePartitions = False
+    # Get runtime options that must be set with each new process/address-space
+    testOptionsStr = job.GetRunOptionsStr()
+    if ((testOptionsStr is not None) and (testOptionsStr != "")):
+        testOptionList = testOptionsStr.split(tdf.VARIABLE_LIST_SEPARATOR)
+        TDF_SetTestOptions(testOptionList)
+    # End - if ((testOptionsStr is not None) and (testOptionsStr != "")):
 
     # Create the neural network in this address space.
     localNeuralNet = MLEngine_CreateNeuralNetFromJobSpec(job)
@@ -2427,8 +2234,6 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
             print("MLEngine_TrainOneFilePartitionInChildProcess Failed making neural net.")
         MLEngine_ReturnResultsFromChildProcess(sendPipeEnd, job, 0, 0, 0, False, -1, -1, E_SERVER_ERROR, "")
         return
-    elif (fDebug):
-        print("MLEngine_TrainOneFilePartitionInChildProcess Made neural net.")
 
     # Many of the models are in Pytorch, but not all anymore, and some parts
     # of training and testing rely on the type of software used.
@@ -2443,15 +2248,10 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
         cudaIsAvailable = torch.cuda.is_available()
         if (cudaIsAvailable):
             numGPUs = torch.cuda.device_count()
-            if (numGPUs <= 0):
-                cudaIsAvailable = False
-        if (fDebug):
-            print("cudaIsAvailable = " + str(cudaIsAvailable))
-            print("numGPUs = " + str(numGPUs))
-        if (cudaIsAvailable):
             gpuDevice = torch.device('cuda')
-            if (gpuDevice is None):
+            if ((numGPUs <= 0) or (gpuDevice is None)):
                 cudaIsAvailable = False
+        # End - if (cudaIsAvailable):
     # End - if (USE_GPU)
 
     if (cudaIsAvailable):
@@ -2476,10 +2276,10 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
     if (fUsePytorch):
         optimizerType = job.GetTrainingParamStr("Optimizer", "").lower()
         if (optimizerType == "sgd"):
-            learningRate = float(job.GetTrainingParamStr("LearningRate", "0.1"))
+            learningRate = float(job.GetTrainingParamStr(mlJob.TRAINING_OPTION_LEARNING_RATE, "0.1"))
             localOptimizer = optim.SGD(localNeuralNet.parameters(), lr=learningRate)
         elif (optimizerType == "adam"):
-            learningRate = float(job.GetTrainingParamStr("LearningRate", "0.1"))
+            learningRate = float(job.GetTrainingParamStr(mlJob.TRAINING_OPTION_LEARNING_RATE, "0.1"))
             weightDecay = 0
             localOptimizer = optim.Adam(localNeuralNet.parameters(), lr=learningRate, weight_decay=weightDecay)
         elif (optimizerType in ("", "none")):
@@ -2491,9 +2291,10 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
 
     # Restore the state of the optimizer. This was saved by the
     # previous child process when it completed.
-    if ((fAllowMultiplePartitions) and (localOptimizer is not None)):
+    if (localOptimizer is not None):
         valStr = job.GetNamedStateAsStr(mlJob.RUNTIME_OPTIMIZER_STATE, "")
         if (valStr != ""):
+            #print("Restore optimizer state: " + str(valStr))
             stateBytes = bytearray.fromhex(valStr)
             ioBuffer = io.BytesIO(stateBytes)
             stateDict = torch.load(ioBuffer)
@@ -2501,11 +2302,16 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
         # End - if (valStr != ""):
     # End - if (localOptimizer is not None):
 
+    localNeuralNet.CheckState(job)
+
     # Do the actual work. 
-    job, numPatientsProcessed, totalSkippedPatients, numDataPointsProcessed, fEOF = MLEngine_TrainOneFilePartitionImpl(job, 
-                                                                currentPartitionStart, currentPartitionStop,
-                                                                localNeuralNet, localLossFunction, localOptimizer,
-                                                                fUsePytorch, cudaIsAvailable, gpuDevice)
+    job, numPatientsProcessed, numDataPointsProcessed = MLEngine_TrainOneFilePartitionImpl(job, 
+                                                                    currentPartitionStart, currentPartitionStop,
+                                                                    localNeuralNet, localLossFunction, localOptimizer,
+                                                                    fUsePytorch, cudaIsAvailable, gpuDevice, 
+                                                                    patientsForTrainingPriority)
+
+    localNeuralNet.CheckState(job)
 
     # Save the updated weights to the job, for later use.
     if (cudaIsAvailable):
@@ -2513,6 +2319,7 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
         # We only do this for training, not testing, because only training will
         # read the updated network matrices and save those back to the Job.
         localNeuralNet = localNeuralNet.cpu()
+
 
     localNeuralNet.SaveNeuralNetstate(job)
     valStr = ""
@@ -2525,14 +2332,16 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr, epochNum,
         # Functions like stateBytes.decode("utf-8") do not work.
         valStr = bufferBytes.hex()
     # End - if (localOptimizer is not None):
+    #print("Save optimizer state: " + str(valStr))
     job.SetNamedStateAsStr(mlJob.RUNTIME_OPTIMIZER_STATE, valStr)
 
     # Send the results back to the control process.
     MLEngine_ReturnResultsFromChildProcess(sendPipeEnd, job, numPatientsProcessed, totalSkippedPatients, numDataPointsProcessed,
-                                            fEOF, currentPartitionStart, currentPartitionStop,
+                                            False, currentPartitionStart, currentPartitionStop,
                                             E_NO_ERROR, "")
 
     if (fDebug):
+        print("MLEngine_TrainOneFilePartitionInChildProcess. Finished. nonceNum = " + str(job.GetNonce()))
         print("MLEngine_TrainOneFilePartitionInChildProcess done, and exiting")
 
     # Return and exit the process.
@@ -2563,6 +2372,13 @@ def MLEngine_TestOneFilePartitionInChildProcess(sendPipeEnd, jobStr, currentPart
 
     # Regenerate the runtime job object from its serialized string form. 
     job = mlJob.MLJob_CreateMLJobFromString(jobStr)
+
+    # Get runtime options that must be set with each new process/address-space
+    testOptionsStr = job.GetRunOptionsStr()
+    if ((testOptionsStr is not None) and (testOptionsStr != "")):
+        testOptionList = testOptionsStr.split(tdf.VARIABLE_LIST_SEPARATOR)
+        TDF_SetTestOptions(testOptionList)
+    # End - if ((testOptionsStr is not None) and (testOptionsStr != "")):
 
     # Create the neural network in this address space.
     localNeuralNet = MLEngine_CreateNeuralNetFromJobSpec(job)
@@ -2620,9 +2436,6 @@ def MLEngine_PreflightNeuralNet(job, partitionSize):
     if (fDebug):
         print("=======================\nPreflight:")
 
-    # Before training, do the preflight
-    job.StartPreflight()
-
     # Get a dictionary of partitions for the file.
     # Initially, this dictionary is in order, so the nth entry in the dictionary is
     # the nth partition, and adjacent entries are adjacent in the file. We will first go
@@ -2642,49 +2455,24 @@ def MLEngine_PreflightNeuralNet(job, partitionSize):
             partitionInfo['start'] = nextPartitionStartPosition
             partitionInfo['stop'] = nextPartitionStartPosition + partitionSize
 
-        # Get information about the current file Partition.
-        currentPartitionStart = partitionInfo['start']
-        currentPartitionStop = partitionInfo['stop']
+        # This will overwrite patientPositionList.
+        job, fEOF, startPosFirstPatient, stopPosLastPatient, patientPositionList, patientsForTrainingPriority = MLEngine_PreflightOneFilePartitionImpl(job, partitionInfo['start'], partitionInfo['stop'])
 
-        # Make a pipe that will be used to return the results. 
-        recvPipeEnd, sendPipeEnd = multiprocessing.Pipe(False)
-
-        # Prepare the arguments to go to the worker process.
-        # This may be another process on this machine or else a remote process on another server.
-        jobStr = job.WriteJobToString()
-        #print("MLEngine_PreflightNeuralNet jobStr=" + str(jobStr))
-
-        # Fork the job process.
-        processInfo = Process(target=MLEngine_PreflightOneFilePartitionInChildProcess, args=(sendPipeEnd, jobStr, 
-                                                                     currentPartitionStart, currentPartitionStop))
-        processInfo.start()
-
-        # Get the results.
-        resultDict = recvPipeEnd.recv()
-
-        jobStr = resultDict['jobStr']
-        job.ReadJobFromString(jobStr)
-        stopValidData = resultDict['stopValidData']
-        patientPositionListStr = resultDict['patientPositionList']
-        ASSERT_IF((patientPositionListStr == ""), 
-            "MLEngine_PreflightNeuralNet. BAD Patient Position List patientPositionListStr: " + str(patientPositionListStr))
-
-        # Wait for the process to complete.
-        processInfo.join()
+        # We build up a list of patient positions during preflight.
+        # We reuse this list on all training epochs to quickly load patients.
+        patientPositionListStr = json.dumps(patientPositionList)
+        patientsForTrainingPriorityStr = json.dumps(patientsForTrainingPriority)
 
         # Update the data to show where this ends, and where to find all patients in this partition.
-        partitionInfo['stop'] = stopValidData
+        partitionInfo['stop'] = stopPosLastPatient
         partitionInfo['ptListStr'] = patientPositionListStr
+        partitionInfo['ptPriorityListStr'] = patientsForTrainingPriorityStr
 
         # The next position will start immediately after this one ends.
-        nextPartitionStartPosition = stopValidData
+        nextPartitionStartPosition = stopPosLastPatient
 
         partitionCount += 1
-        if ((DD_DEBUG_TRUNCATE_PREFLIGHT) and (partitionCount >= DD_DEBUG_TRUNCATE_NUM_PARTITIONS)):
-            break
     # End - for partitionInfo in partitionList:
-
-    job.FinishPreflight()
 
     # Return the updated job that has been changed by the child processes.
     return job, partitionList
@@ -2701,7 +2489,7 @@ def MLEngine_PreflightNeuralNet(job, partitionSize):
 # [MLEngine_TrainNeuralNet]
 #
 ################################################################################
-def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
+def MLEngine_TrainNeuralNet(job, partitionSize):
     fDebug = False
     childProcessErr = E_NO_ERROR
 
@@ -2713,10 +2501,6 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
     # through the file in this sequence, but may shuffle it on later epochs.
     job, partitionList = MLEngine_PreflightNeuralNet(job, partitionSize)
 
-    # Return the updated job that has been changed by the child processes.
-    if (fSimulation):
-        return job
-
     print("=======================\nTraining:")
     job.StartTraining()
 
@@ -2725,9 +2509,10 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
     #######################################
     # TRAINING - Iterate once for each Epoch
     for epochNum in range(numEpochs):
-        #print("\n\n\n\n============================================================\n\n\n\n")
+        if (fDebug):
+            print("\n\n\n\n============================================================\nEpoch: " 
+                    + str(epochNum) + "\n\n\n")
         job.StartTrainingEpoch()
-        job.RecordDebugEvent(mlJob.DEBUG_EVENT_TIMELINE_EPOCH)
         
         #######################################
         # This loop looks at each partition in the file. One partition is 
@@ -2738,7 +2523,8 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
             # On the first epoch, this is still being updated as we find the patient boundaries in the file.
             currentPartitionStart = partitionInfo['start']
             currentPartitionStop = partitionInfo['stop']
-            #patientPositionListStr = partitionInfo['ptListStr']
+            patientPositionListStr = partitionInfo['ptListStr']
+            patientsForTrainingPriorityStr = partitionInfo['ptPriorityListStr']
 
             # Make a pipe that will be used to return the results. 
             recvPipeEnd, sendPipeEnd = multiprocessing.Pipe(False)
@@ -2749,7 +2535,7 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
 
             # Fork the job process.
             processInfo = Process(target=MLEngine_TrainOneFilePartitionInChildProcess, args=(sendPipeEnd, jobStr, 
-                                                        epochNum, currentPartitionStart, currentPartitionStop))
+                                                        currentPartitionStart, currentPartitionStop, patientsForTrainingPriorityStr))
             processInfo.start()
 
             # Get the results.
@@ -2783,9 +2569,6 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
                 job.SetNumDataPointsPerEpoch(job.GetNumDataPointsPerEpoch() + numDataPointsProcessed)
 
             partitionCount += 1
-            if ((DD_DEBUG_TRUNCATE_TRAINING) and (partitionCount >= DD_DEBUG_TRUNCATE_NUM_PARTITIONS)):
-                print("Truncating training")
-                break
         # End - for partitionInfo in partitionList:
 
         job.FinishTrainingEpoch()
@@ -2797,14 +2580,11 @@ def MLEngine_TrainNeuralNet(job, fSimulation, partitionSize):
 
         # At the end of each partition, shuffle the partition list so we will
         # train the data in a different order on the next epoch.
-        if (not DD_DEBUG):
-            if (not job.IsTrainingOptionSet("NoShuffle")):
-                random.shuffle(partitionList)
+        random.shuffle(partitionList)
 
-        if ((childProcessErr == E_ASSERT_ERROR) or (DD_DEBUG_TRUNCATE_TRAINING)):
+        if (childProcessErr == E_ASSERT_ERROR):
             break
     # End - for epochNum in range(numEpochs):
-
 
     # Return the updated job that has been changed by the child processes.
     return job, childProcessErr
@@ -2862,8 +2642,6 @@ def MLEngine_TestNeuralNet(job, partitionSize):
         currentPartitionStop = currentPartitionStart + partitionSize
 
         partitionCount += 1
-        if ((DD_DEBUG_TRUNCATE_TESTING) and (partitionCount >= DD_DEBUG_TRUNCATE_NUM_PARTITIONS)):
-            break
     # End - while (not fEOF):
 
     # Return the updated job that has been changed by the child processes.
@@ -2887,10 +2665,9 @@ def MLEngine_RunJob(jobFilePathName, trainedJobFilePathName, fDebug):
     # Open the job.
     jobErr, job = mlJob.MLJob_ReadExistingMLJob(jobFilePathName)
     if (mlJob.JOB_E_NO_ERROR != jobErr):
-        print("MLEngine_RunJob. Error making network")
+        print("MLEngine_RunJob. Error making network for " + jobFilePathName)
         return
 
-    #job.SetLogFilePathname("/home/ddean/ddRoot/logs/mlTrainTest-", True)
     job.SetDebug(fDebug)
 
     MLEngine_Init_GPU()
@@ -2913,7 +2690,7 @@ def MLEngine_RunJob(jobFilePathName, trainedJobFilePathName, fDebug):
             except Exception:
                 partitionSize = PARTITION_SIZE
 
-        job, err = MLEngine_TrainNeuralNet(job, False, partitionSize)
+        job, err = MLEngine_TrainNeuralNet(job, partitionSize)
     # End - if (trainTDFFilePathName != ""):
 
     if (err == E_NO_ERROR):
@@ -2936,3 +2713,42 @@ def MLEngine_RunJob(jobFilePathName, trainedJobFilePathName, fDebug):
 
 
 
+################################################################################
+################################################################################
+def MLEngine_ValidateTensor(testTensor):
+    fDebug = False
+    fIsValid = True
+
+    arrayDimList = testTensor.shape
+    numDimensions = len(arrayDimList)
+    numDataSamples = arrayDimList[0]
+    if (fDebug):
+        print("testTensor = " + str(testTensor))
+        print("type(testTensor) = " + str(type(testTensor)))
+        print("arrayDimList = " + str(arrayDimList))
+        print("numDimensions = " + str(numDimensions))
+        print("numDataSamples = " + str(numDataSamples))
+
+    for inputVecNum in range(numDataSamples):
+        if (numDimensions == 3):
+            vec = testTensor[inputVecNum][0]
+        else:
+            vec = testTensor[inputVecNum]
+        numValues = len(vec)
+
+        for currentValEntry in vec:
+            currentVal = currentValEntry.item()
+            #print("currentVal = " + str(currentVal))
+            if ((math.isnan(currentVal)) or (currentVal > 1.0E9) or (currentVal < -1.0E9)):
+                fIsValid = False
+                break
+        # End - for currentValEntry in vec:
+    # End - for inputVecNum in range(numDataSamples):
+
+    if (not fIsValid):
+        print("ERROR! NaN value!")
+        print("testTensor = " + str(testTensor))
+        #raise Exception()
+
+    return fIsValid
+# End - MLEngine_ValidateTensor
