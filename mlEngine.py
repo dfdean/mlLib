@@ -1666,13 +1666,6 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
     if (cudaIsAvailable):
         output = output.cpu()
 
-    # <><><><><><><><><> HACK 
-    # Question - Do we use every result or just the last result?????????
-    print("=============")
-    print("\n\nRNN BAIL! Inside MLEngine_TestGroupOfDataPoints \n\n")
-    raise Exception()
-    # <><><><><><><><><> HACK 
-
     ASSERT_IF((output is None), "MLEngine_TestGroupOfDataPoints. output is None")
     predictedResultList = MLEngine_MakeListOfResults(job, output, numDataSamples, 
                                                      fUsePytorch, networkOutputDataType)
@@ -1689,6 +1682,14 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
 
         job.RecordTestingResult(trueResult, predictedResultList[index])
     # End - for index in range(numDataSamples):
+
+
+    # <><><><><><><><><> HACK 
+    # Question - Do we use every result or just the last result?????????
+    print("=============")
+    print("\n\nRNN BAIL! Inside MLEngine_TestGroupOfDataPoints")
+    raise Exception()
+    # <><><><><><><><><> HACK 
 # End - MLEngine_TestGroupOfDataPoints
 
 
@@ -1728,26 +1729,33 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
         return predictedResultList
     # End - if xgBoost and Categorical
 
-    predictedResultList = [0] * numDataSamples
 
     # Compare predicted outputs to the ground-truth targets.
-    for index in range(numDataSamples):
-        # In a logistic, we want the probability that an item is true, not the most likely.
-        # Note, a Boolean is a category result with two categories (0 and 1). But a Boolean
-        # that is also a logistic is a single floating point value between 0 and 1.
-        if (isLogistic):
-            if (fUsePytorch):
-                # Output is N x 1 x 1 where minibatch dim is 1 and there is also only 1 output, 
-                # which is the result of the sigmoid.
-                predictedResult = output[index][0][0].item()
-            else:
-                # Output is vector of length N, the result of the sigmoid.
-                predictedResult = output[index]
-            if (fDebug):
-                print("MLEngine_MakeListOfResults. Logistic Network predictedResult: " + str(predictedResult))
-        # End - if (isLogistic):
-        # A category output is a list of probabilities. Get the class ID with the top probability
-        elif (networkOutputDataType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
+    # An int or float output is just the number.
+    if (networkOutputDataType in (tdf.TDF_DATA_TYPE_FLOAT, tdf.TDF_DATA_TYPE_INT)):
+        if (fUsePytorch):
+            predictedResultList = output[:,0,0].tolist()
+        else:
+            predictedResultList = output.tolist()
+    # End - if (tdf.TDF_DATA_TYPE_FLOAT or tdf.TDF_DATA_TYPE_INT):
+    # In a logistic, we want the probability that an item is true, not the most likely.
+    # Note, a Boolean is a category result with two categories (0 and 1). But a Boolean
+    # that is also a logistic is a single floating point value between 0 and 1.
+    elif (isLogistic):
+        if (fUsePytorch):
+            # Output is N x 1 x 1 where minibatch dim is 1 and there is also only 1 output, 
+            # which is the result of the sigmoid.
+                predictedResultList[index] = output[:,0,0].tolist()
+        else:
+            # Output is vector of length N, the result of the sigmoid.
+            predictedResult = output.tolist()
+        if (fDebug):
+            print("MLEngine_MakeListOfResults. Logistic Network predictedResult: " + str(predictedResult))
+    # End - if (isLogistic):
+    # A category output is a list of probabilities. Get the class ID with the top probability
+    elif (networkOutputDataType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
+        predictedResultList = [0] * numDataSamples
+        for index in range(numDataSamples):
             if (fUsePytorch):
                 topProbability, topIndexTensor = output[index][0].topk(1)
                 predictedResult = topIndexTensor.item()
@@ -1762,17 +1770,10 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
                 predictedResult = mostProbableCategoryList[index]
                 if (fDebug):
                     print("MLEngine_MakeListOfResults. mostProbableCategoryList = " + str(mostProbableCategoryList))
-        # End - elif (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS or tdf.TDF_DATA_TYPE_BOOL)):
-        # An int or float output is just the number.
-        else:  # if ((tdf.TDF_DATA_TYPE_FLOAT) or (tdf.TDF_DATA_TYPE_INT)):
-            if (fUsePytorch):
-                predictedResult = output[index][0][0].item()
-            else:
-                predictedResult = output[index]
-        # End - if (tdf.TDF_DATA_TYPE_FLOAT or tdf.TDF_DATA_TYPE_INT):
+            predictedResultList[index] = predictedResult
+        # End - for index in range(numDataSamples):
+    # End - elif (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS or tdf.TDF_DATA_TYPE_BOOL)):
 
-        predictedResultList[index] = predictedResult
-    # End - for index in range(numDataSamples):
 
     if (fDebug):
         print("MLEngine_MakeListOfResults - predictedResultList: " + str(predictedResultList))
@@ -2738,7 +2739,7 @@ def MLEngine_ValidateTensor(testTensor):
         for currentValEntry in vec:
             currentVal = currentValEntry.item()
             #print("currentVal = " + str(currentVal))
-            if ((math.isnan(currentVal)) or (currentVal > 1.0E7) or (currentVal < -1.0E7)):
+            if ((math.isnan(currentVal)) or (currentVal > 1.0E9) or (currentVal < -1.0E9)):
                 fIsValid = False
                 break
         # End - for currentValEntry in vec:
