@@ -548,13 +548,6 @@ class MLJobTestResults():
         fDebug = False
         self.NumSamplesTested += 1
 
-        # <><><><><><><><><> HACK 
-        # Question - Do we use every result or just the last result?????????
-        print("=============")
-        print("\n\nRNN BAIL! Inside MLJobTestResults::RecordTestingResult")
-        raise Exception()
-        # <><><><><><><><><> HACK 
-
         #########################
         if (self.ResultValueType in (tdf.TDF_DATA_TYPE_INT, tdf.TDF_DATA_TYPE_FLOAT)):
             difference = abs(float(actualValue - predictedValue))
