@@ -95,9 +95,9 @@ def JobShow_WriteReport(job, fileType, filePathName):
     # End - if (job.GetNumSequencesTrainedPerEpoch() > 0):
 
     csvLineReport = lrStr
-    numSequencesTested = job.GetNumSequencesTested()
-    testResults = job.GetTestResults()
-    testNumItemsPerClass = job.GetTestNumItemsPerClass()
+    numSequencesTested = job.GetNumSequencesTested(-1)
+    testResults = job.GetTestResults(-1)
+    testNumItemsPerClass = job.GetTestNumItemsPerClass(-1)
 
 
     #########################
@@ -191,22 +191,22 @@ def JobShow_WriteReport(job, fileType, filePathName):
 
         csvLineReport += ", " + str(totalNumItems) + ", " + str(totalAcc)
 
-        if (job.GetROCAUC() > 0):
-            roundedAUC = round(job.GetROCAUC(), 3)
+        if (job.GetROCAUC(-1) > 0):
+            roundedAUC = round(job.GetROCAUC(-1), 3)
             testResultStr += "ROC AUC: " + str(roundedAUC) + NEWLINE_STR
             csvLineReport += ", " + str(roundedAUC)
         else:
             csvLineReport += ", "
 
-        if (job.GetAUPRC() > 0):
-            roundedAUPRC = round(job.GetAUPRC(), 3)
+        if (job.GetAUPRC(-1) > 0):
+            roundedAUPRC = round(job.GetAUPRC(-1), 3)
             testResultStr += "AUPRC: " + str(roundedAUPRC) + NEWLINE_STR
             csvLineReport += ", " + str(roundedAUPRC)
         else:
             csvLineReport += ", "
 
-        if (job.GetF1Score() > 0):
-            roundedF1Score = round(job.GetF1Score(), 3)
+        if (job.GetF1Score(-1) > 0):
+            roundedF1Score = round(job.GetF1Score(-1), 3)
             testResultStr += "F1Score: " + str(roundedF1Score) + NEWLINE_STR
             csvLineReport += ", " + str(roundedF1Score)
         else:
@@ -218,8 +218,8 @@ def JobShow_WriteReport(job, fileType, filePathName):
     testResultStr += NEWLINE_STR
     testPredictionPerBucketStr = ""
     testActualAndCorrectPerBucketStr = ""
-    testNumPredictionsPerClass = job.GetTestNumPredictionsPerClass()
-    testNumCorrectPerClass = job.GetTestNumCorrectPerClass()
+    testNumPredictionsPerClass = job.GetTestNumPredictionsPerClass(-1)
+    testNumCorrectPerClass = job.GetTestNumCorrectPerClass(-1)
     if (numSequencesTested > 0):
         bucketStartValue = job.GetResultValMinValue()
         bucketStopValue = bucketStartValue + job.GetResultValBucketSize()
@@ -330,8 +330,8 @@ def JobShow_WriteReport(job, fileType, filePathName):
 # 
 #####################################################
 def JobShow_DrawROCCurves(job, fROC, fPRC, titleStr, showInGUI, filePath):
-    logisticResultsTrueValueList = job.GetLogisticResultsTrueValueList()
-    logisticResultsPredictedProbabilityList = job.GetLogisticResultsPredictedProbabilityList()
+    logisticResultsTrueValueList = job.GetLogisticResultsTrueValueList(-1)
+    logisticResultsPredictedProbabilityList = job.GetLogisticResultsPredictedProbabilityList(-1)
 
     ####################################
     # plot the precision-recall curves
@@ -400,13 +400,13 @@ def GetJobValue(job, valueName, valueIndex):
     fDebug = False
     resultValue = None
 
-    numSequencesTested = job.GetNumSequencesTested()
-    testResults = job.GetTestResults()
+    numSequencesTested = job.GetNumSequencesTested(-1)
+    testResults = job.GetTestResults(-1)
     if (fDebug):
         print("valueName = " + str(valueName))
         print("numSequencesTested = " + str(numSequencesTested))
         print("job.GetResultValueType() = " + str(job.GetResultValueType()))
-        print("job.GetROCAUC() = " + str(job.GetROCAUC()))
+        print("job.GetROCAUC(-1) = " + str(job.GetROCAUC(-1)))
 
 
     valueName = valueName.lower()
@@ -443,16 +443,16 @@ def GetJobValue(job, valueName, valueIndex):
         return round((totalAcc * 100.0), 1)
     #########################
     elif ((valueName == "auc") and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_BOOL) 
-            and (numSequencesTested > 0) and (job.GetROCAUC() > 0)):
-        return round(job.GetROCAUC(), 3)
+            and (numSequencesTested > 0) and (job.GetROCAUC(-1) > 0)):
+        return round(job.GetROCAUC(-1), 3)
     #########################
     elif ((valueName == "auprc") and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_BOOL) 
-            and (numSequencesTested > 0) and (job.GetAUPRC() > 0)):
-        return round(job.GetAUPRC(), 3)
+            and (numSequencesTested > 0) and (job.GetAUPRC(-1) > 0)):
+        return round(job.GetAUPRC(-1), 3)
     #########################
     elif ((valueName == "f1") and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_BOOL) 
-            and (numSequencesTested > 0) and (job.GetF1Score() > 0)):
-        return round(job.GetF1Score(), 3)
+            and (numSequencesTested > 0) and (job.GetF1Score(-1) > 0)):
+        return round(job.GetF1Score(-1), 3)
     #########################
     elif ((valueName == "accurratewithin5percent")
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 

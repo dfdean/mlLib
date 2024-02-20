@@ -495,6 +495,12 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
         print("biasVector = " + str(biasVector))
     # End - DebugPrint
 
+    #####################################################
+    # MLEngine_SingleLayerNeuralNet.IsNetworkRecurrent
+    #####################################################
+    def IsNetworkRecurrent(self):
+        return False
+    # End - IsNetworkRecurrent
 # class MLEngine_SingleLayerNeuralNet(nn.Module):
 
 
@@ -1041,6 +1047,14 @@ class MLEngine_DeepNeuralNet(nn.Module):
     # End - DebugPrint
 
 
+    #####################################################
+    # MLEngine_DeepNeuralNet.IsNetworkRecurrent
+    #####################################################
+    def IsNetworkRecurrent(self):
+        return self.IsRNN
+    # End - IsNetworkRecurrent
+
+
 # class MLEngine_DeepNeuralNet(nn.Module):
 
 
@@ -1269,6 +1283,13 @@ class MLEngine_LSTMNeuralNet(nn.Module):
     def DebugPrint(self):
         return
     # End - DebugPrint
+
+    #####################################################
+    # MLEngine_LSTMNeuralNet.IsNetworkRecurrent
+    #####################################################
+    def IsNetworkRecurrent(self):
+        return True
+    # End - IsNetworkRecurrent
 
 # class MLEngine_LSTMNeuralNet(nn.Module):
 
@@ -1670,9 +1691,12 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
     predictedResultList = MLEngine_MakeListOfResults(job, output, numDataSamples, 
                                                      fUsePytorch, networkOutputDataType)
 
+
+
     # Compare predicted outputs to the ground-truth targets.
     # We store the results in the Job, and include lots of statistics like what
     # the accuracy was for different groups of result. 
+    fIsRNN = localNeuralNet.IsNetworkRecurrent(self)
     for index in range(numDataSamples):
         # Pytorch uses a 3rd dimension, for minibatches
         if (fAddMinibatchDimension):
@@ -1680,16 +1704,12 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
         else:
             trueResult = trueResultArray[index][0]
 
-        job.RecordTestingResult(trueResult, predictedResultList[index])
+        if (fIsRNN):
+            subGroupNum = index
+        else:
+            subGroupNum = -1
+        job.RecordTestingResult(trueResult, predictedResultList[index], subGroupNum)
     # End - for index in range(numDataSamples):
-
-
-    # <><><><><><><><><> HACK 
-    # Question - Do we use every result or just the last result?????????
-    print("=============")
-    print("\n\nRNN BAIL! Inside MLEngine_TestGroupOfDataPoints")
-    raise Exception()
-    # <><><><><><><><><> HACK 
 # End - MLEngine_TestGroupOfDataPoints
 
 
@@ -2708,6 +2728,13 @@ def MLEngine_RunJob(jobFilePathName, trainedJobFilePathName, fDebug):
     JobShow.JobShow_WriteReport(job, JobShow.MLJOB_LOG_REPORT, "")
     #JobShow.JobShow_WriteReport(job, MLJOB_FILE_REPORT, "/home/ddean/ddRoot/trainingResults.txt")
     #JobShow.JobShow_WriteReport(job, MLJOB_FILE_REPORT, "/home/ddean/ddRoot/trainingResults.csv")
+
+    # <><><><><><><><><> HACK 
+    # Question - Do we use every result or just the last result?????????
+    print("=============")
+    print("\n\nRNN BAIL! Inside MLEngine_RunJob()")
+    raise Exception()
+    # <><><><><><><><><> HACK 
 # End - MLEngine_RunJob
 
 

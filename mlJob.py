@@ -31,18 +31,102 @@
 # Top Level Elements
 # ===============================
 #   <JobControl>
+#       JobName - A string that identifies the job to a human
+#       JobType - Basic
+#       JobSpecVersion - Currently 1.0
+#       Status - IDLE, TRAIN, TEST
+#       AllowGPU - True/False, defaults to True
+#       Debug - True/False, defaults to False
+#       LogFilePathName - A pathname where the log file for this execution is stored.
+#           This file is created/emptied when the job starts.
+#       StressTest - True/False, defaults to False
 #   </JobControl>
 #
 #   <Data>
+#       DataFormat 
+#           TDF
+#       StoreType
+#           File
+#       TrainData - A file pathname
+#       TestData - A file pathname
 #   </Data>
 #
 #   <Network>
+#       NetworkType
+#           SimpleNet | DeepNet | LSTM
+#
+#       LogisticOutput
+#       OutputThreshold
+#           A number between 0 and 1 which determines whether the prediction is true.
+#           This is only used for Logistic networks
+#
+#       InputSequence
+#       InputSequenceMinSize
+#       InputSequenceMaxSize
+#           This defaults to 1 for a function that takes a single value and outputs a result.
+#    
+#       MaxSequenceDurationInDays
+#           How far apart a sequence duration can be spread
+#
+#       StateSize
+#           An integer, 0-N, which is the size of a RNN state vector.
+#           If not specified, then this is 0
+#           If this is 0, then this is a simple deep neural network. It is
+#               an RNN iff this value is present and greater than 0
+#
 #       <InputLayer>
+#           layerOutputSize
+#           NonLinear - 
+#               LogSoftmax | ReLU | Sigmoid
+#           InputValues - A comma-separated list of variables, like "Age,Cr,SBP". 
+#               See the TDFTools.py documentation for a list of defined names.
+#               The value name appeats in a <D> element. 
+#               For example, Hgb would extract data from the following <D> element:
+#                   <D C="L" T="100:10:30">Hgb=7.0,</D>
+#               Each value may be followed by an offset in brackets
+#               Examples: Cr[-1]   INR[next]
+#               The number in brackets is the number of days from the current point in the timeline.
+#               The offset "next" means the next occurrence.    
+#               The special value "Dose" is always followed by a "/" and then the name of a medication.
+#               For example Dose/Coumadin is the dose of Coumadin given.
+#               Doses may also have offsets. For example Dose/Coumadin[-1] is the dose of Coumadin given 1 day before.
+#
 #       <HiddenLayer>
+#           layerOutputSize
+#           NonLinear - 
+#               LogSoftmax | ReLU | Sigmoid
+#
 #       <OutputLayer>
+#           layerOutputSize
+#           NonLinear - 
+#               LogSoftmax | ReLU | Sigmoid
+#           ResultValue - A variable name. See the TDFTools.py documentation.
+#           Different variables have different interpretations as result values.
+#           These include:
+#               Number - A numeric value, which may be a dose or a lab value
+#               FutureEventClass - A number 0-11. See the TDFTools.py documentation.
+#               Binary - A number 0-1
+#               FutureEventClass or BinaryDiagnosis will count the number of exact matches; the 
+#                   predicted class must exactly match the actual value.
+#               Number will count buckets:
+#               Exact (to 1 decimal place)
+#               Within 2%
+#               Within 5%
+#               Within 10%
+#               Within 25%
+#
 #   </Network>
 #
 #   <Training>
+#       LossFunction
+#           NLLLoss | BCELoss
+#
+#       Optimizer
+#           SGD
+#
+#       LearningRate
+#       BatchSize
+#       NumEpochs
 #   </Training>
 #
 #   <Results>
@@ -59,13 +143,56 @@
 #       </PreflightResults>
 #
 #       <TrainingResults>
+#           NumSequencesTrainedPerEpoch
+#           NumPatientsTrainedPerEpoch
+#           NumPatientsSkippedPerEpoch
+#           TrainAvgLossPerEpoch
+#          TrainNumItemsPerClass
 #       </TrainingResults>
 #
 #       <TestingResults>
 #           <Hist0>
+#               NumSequencesTested
+#               TestNumItemsPerClass
+#               TestNumPredictionsPerClass
+#               TestNumCorrectPerClass
+#              NumCorrectPredictions
+#               Used for int and float results:
+#                  NumPredictionsWithin2Percent
+#                   NumPredictionsWithin5Percent
+#                   NumPredictionsWithin10Percent
+#                   NumPredictionsWithin20Percent
+#                   NumPredictionsWithin50Percent
+#                   NumPredictionsWithin100Percent
+#               Used for class results.
+#                   NumPredictionsWithin1Class
+#               Used for binary results.
+#                   NumPredictionsTruePositive
+#                   NumPredictionsTrueNegative
+#                   NumPredictionsFalsePositive
+#                   NumPredictionsFalseNegative
 #           </Hist0>
 #
 #           <Hist1>
+#               NumSequencesTested
+#               TestNumItemsPerClass
+#               TestNumPredictionsPerClass
+#               TestNumCorrectPerClass
+#              NumCorrectPredictions
+#               Used for int and float results:
+#                  NumPredictionsWithin2Percent
+#                   NumPredictionsWithin5Percent
+#                   NumPredictionsWithin10Percent
+#                   NumPredictionsWithin20Percent
+#                   NumPredictionsWithin50Percent
+#                   NumPredictionsWithin100Percent
+#               Used for class results.
+#                   NumPredictionsWithin1Class
+#               Used for binary results.
+#                   NumPredictionsTruePositive
+#                   NumPredictionsTrueNegative
+#                   NumPredictionsFalsePositive
+#                   NumPredictionsFalseNegative
 #           </Hist1>
 #
 #       </TestingResults>
@@ -73,207 +200,32 @@
 #   </Results>
 #
 #   <Runtime>
+#   The runtime state for the Job training/testing sequence. It is describes the execution
+#   of a job, not the job results.
+#       JobFilePathName
+#
+#       StartRequestTimeStr
+#       StopRequestTimeStr
+#
+#       CurrentEpochNum
+#       TotalTrainingLossInCurrentEpoch
+#
+#       BufferedLogLines
+#
+#       OS  
+#       CPU
+#       GPU
 #   </Runtime>
 #
-#
-# Member Variables for JobControl 
-# ===============================
-#   JobName - A string that identifies the job to a human
-#   JobType - Basic
-#   JobSpecVersion - Currently 1.0
-#   Status - IDLE, TRAIN, TEST
-#   AllowGPU - True/False, defaults to True
-#   Debug - True/False, defaults to False
-#   LogFilePathName - A pathname where the log file for this execution is stored.
-#       This file is created/emptied when the job starts.
-#   StressTest - True/False, defaults to False
-#
-#
-# Member Variables for Data
-# ===========================
-#   DataFormat 
-#       TDF
-#   StoreType
-#       File
-#   TrainData - A file pathname
-#   TestData - A file pathname
-#
-#
-# Member Variables for Network
-# ===========================
-#   NetworkType
-#       SimpleNet
-#       DeepNet
-#       LSTM
-#
-#   LogisticOutput
-#   OutputThreshold
-#       A number between 0 and 1 which determines whether the prediction is true.
-#       This is only used for Logistic networks
-#
-#   InputSequence
-#   InputSequenceMinSize
-#   InputSequenceMaxSize
-#       This defaults to 1 for a function that takes a single value and outputs a result.
-#    
-#   MaxSequenceDurationInDays
-#       How far apart a sequence duration can be spread
-#
-#   StateSize
-#       An integer, 0-N, which is the size of a RNN state vector.
-#       If not specified, then this is 0
-#       If this is 0, then this is a simple deep neural network. It is
-#           an RNN iff this value is present and greater than 0
-#
-#   InputLayer
-#       Contents described below
-#
-#   HiddenLayer
-#       Contents described below
-#
-#   OutputLayer
-#       Contents described below
-#
-#
-# Member Variables for InputLayer
-# ===========================
-#       InputValues - A comma-separated list of variables, like "Age,Cr,SBP". 
-#          See the TDFTools.py documentation for a list of defined names.
-#          The value name appeats in a <D> element. 
-#          For example, Hgb would extract data from the following <D> element:
-#              <D C="L" T="100:10:30">Hgb=7.0,</D>
-#          Each value may be followed by an offset in brackets
-#          Examples: Cr[-1]   INR[next]
-#          The number in brackets is the number of days from the current point in the timeline.
-#          The offset "next" means the next occurrence.    
-#          The special value "Dose" is always followed by a "/" and then the name of a medication.
-#          For example Dose/Coumadin is the dose of Coumadin given.
-#          Doses may also have offsets. For example Dose/Coumadin[-1] is the dose of Coumadin given 1 day before.
-#
-#       layerOutputSize
-#       NonLinear - 
-#           LogSoftmax
-#           ReLU
-#           Sigmoid
-#
-#
-# Member Variables for HiddenLayer
-# ===========================
-#       layerOutputSize
-#       NonLinear - 
-#           LogSoftmax
-#           ReLU
-#           Sigmoid
-#
-#
-# Member Variables for OutputLayer
-# ===========================
-#       layerOutputSize
-#       NonLinear - 
-#           LogSoftmax
-#           ReLU
-#           Sigmoid
-#
-#       ResultValue - A variable name. See the TDFTools.py documentation.
-#       Different variables have different interpretations as result values.
-#       These include:
-#           Number - A numeric value, which may be a dose or a lab value
-#           FutureEventClass - A number 0-11. See the TDFTools.py documentation.
-#           Binary - A number 0-1
-#           FutureEventClass or BinaryDiagnosis will count the number of exact matches; the 
-#               predicted class must exactly match the actual value.
-#       Number will count buckets:
-#           Exact (to 1 decimal place)
-#           Within 2%
-#           Within 5%
-#           Within 10%
-#           Within 25%
-#
-#
-# Member Variables for Training
-# ===========================
-#   LossFunction
-#       NLLLoss
-#       BCELoss
-#
-#   Optimizer
-#       SGD
-#
-#   LearningRate
-#   BatchSize
-#   NumEpochs
-# 
-#
-# Member Variables for TrainingResults
-# ===========================
-#   NumSequencesTrainedPerEpoch
-#   NumPatientsTrainedPerEpoch
-#   NumPatientsSkippedPerEpoch
-#   TrainAvgLossPerEpoch
-#   TrainNumItemsPerClass
-#
-#
-# Member Variables for TestingResults
-# ===========================
-#   NumSequencesTested
-#
-#   TestNumItemsPerClass
-#   TestNumPredictionsPerClass
-#   TestNumCorrectPerClass
-#
-#   NumCorrectPredictions
-#   Used for int and float results:
-#       NumPredictionsWithin2Percent
-#       NumPredictionsWithin5Percent
-#       NumPredictionsWithin10Percent
-#       NumPredictionsWithin20Percent
-#       NumPredictionsWithin50Percent
-#       NumPredictionsWithin100Percent
-#   Used for class results.
-#       NumPredictionsWithin1Class
-#   Used for binary results.
-#       NumPredictionsTruePositive
-#       NumPredictionsTrueNegative
-#       NumPredictionsFalsePositive
-#       NumPredictionsFalseNegative
-#
-#
-# Member Variables for Runtime
-# The runtime state for the Job training/testing sequence. It is describes the execution
-# of a job, not the job results.
-# ===========================
-#   JobFilePathName
-#
-#   StartRequestTimeStr
-#   StopRequestTimeStr
-#
-#   CurrentEpochNum
-#   TotalTrainingLossInCurrentEpoch
-#
-#   BufferedLogLines
-#
-#   OS
-#   CPU
-#   GPU
-#
-#
-# SavedModelStateXMLNode
-# ===========================
-#   NeuralNetMatrixListXMLNode
-#
-#
-# Member Variables for NeuralNetMatrixListXMLNode
-# This is part of SavedModelStateXMLNode, and it is used for neural nets (deep and logistics)
-# ===========================
+# <SavedModelState>
+#   <PyTorchOptimizerState>
+#   <NeuralNetMatrixList>
+#   This is part of SavedModelStateXMLNode, and it is used for neural nets (deep and logistics)
 #   The runtime weight matrices and bias vectors for a network.
 #   This allows a network to suspend and then later resume its state, possibly in a 
 #   different process or a different server.
-#
-#   <Weight>
-#   </Weight>
-#
-#   <Bias>
-#   </Bias>
+#       <Weight>
+#       <Bias>
 #
 #####################################################################################
 import os
@@ -375,7 +327,8 @@ RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE = "ClassWeight"
 
 # <Results><TestingResults>
 RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME = "AllTests"
-NUM_TEST_RESULT_GROUPS   = 10
+RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME = "TestSubGroup"
+
 RESULTS_TEST_NUM_ITEMS_ELEMENT_NAME = "NumSequences"
 RESULTS_TEST_NUM_ITEMS_PER_CLASS_ELEMENT_NAME = "NumItemsPerClass"
 RESULTS_TEST_NUM_PREDICTIONS_PER_CLASS_ELEMENT_NAME = "NumPredictionsPerClass"
@@ -840,6 +793,11 @@ class MLJob():
         self.ResultsTestingXMLNode = None
 
         self.AllTestResults = MLJobTestResults()
+        self.NumResultsSubgroups = 10
+        self.TestResultsSubgroupList = []
+        for index in range(self.NumResultsSubgroups):
+            self.TestResultsSubgroupList.append(MLJobTestResults())
+
         self.NumResultClasses = 0
         self.numInputVars = -1
 
@@ -871,16 +829,17 @@ class MLJob():
         self.TrainingResultBucketSize = 1
         self.TrainingResultClassPriorities = []
 
+        # Preflight state
         self.NumResultsInPreflight = 0
         self.PreflightNumItemsPerClass = []
         self.PreflightInputMins = []
         self.PreflightInputMaxs = []
         self.PreflightInputRanges = []
-
         self.ResultValMinValue = 0
         self.ResultValMaxValue = 0
         self.ResultValBucketSize = 0
 
+        # Runtime state
         self.StartRequestTimeStr = ""
         self.StopRequestTimeStr = ""
         self.CurrentEpochNum = 0
@@ -902,7 +861,6 @@ class MLJob():
         # Runtime State
         self.StartRequestTimeStr = ""
         self.StopRequestTimeStr = ""
-    
         self.CurrentEpochNum = 0
         self.TotalTrainingLossInCurrentEpoch = 0.0
         self.NumTrainLossValuesCurrentEpoch = 0
@@ -947,7 +905,9 @@ class MLJob():
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
                                                         RESULTS_TESTING_ELEMENT_NAME)
         self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
-
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
 
         # The saved state
         self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, 
@@ -1116,6 +1076,9 @@ class MLJob():
         self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
         self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
 
         self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
 
@@ -1369,6 +1332,9 @@ class MLJob():
         self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
         self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
 
         # Each request has a single test. When we finish the test, we have
         # finished the entire reqeust.
@@ -1415,6 +1381,12 @@ class MLJob():
         else:
             self.SetJobControlStr(JOBCTL_RESULT_MSG_ELEMENT_NAME, errorMsg)
 
+        # Discard all of the hash values. Those are only used for debugging.
+        xmlNode = dxml.XMLTools_GetChildNode(self.RuntimeXMLNode, RUNTIME_HASH_DICT_ELEMENT_NAME)
+        if (xmlNode is not None):
+            dxml.XMLTools_RemoveAllChildNodes(xmlNode)
+        self.HashDict = {}
+
         now = datetime.now()
         self.StopRequestTimeStr = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1424,8 +1396,14 @@ class MLJob():
         self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
         self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
 
         self.AllTestResults.StopTesting()
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].StopTesting()
     # End of FinishJobExecution
 
 
@@ -1473,6 +1451,15 @@ class MLJob():
         self.numInputVars = len(inputVarArray)
 
         self.AllTestResults.SetGlobalResultInfo(self.ResultValueType, 
+                                    self.NumResultClasses, 
+                                    self.ResultValMinValue, 
+                                    self.ResultValMaxValue, 
+                                    self.ResultValBucketSize, 
+                                    self.IsLogisticNetwork, 
+                                    self.OutputThreshold)
+
+        for index in range(self.NumResultsSubgroups):
+            self.TestResultsSubgroupList[index].SetGlobalResultInfo(self.ResultValueType, 
                                     self.NumResultClasses, 
                                     self.ResultValMinValue, 
                                     self.ResultValMaxValue, 
@@ -1718,6 +1705,8 @@ class MLJob():
         self.InferResultInfo()
 
         self.AllTestResults.StartTesting()
+        for index in range(self.NumResultsSubgroups):
+            self.TestResultsSubgroupList[index].StartTesting()
 
         self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_TESTING)
     # End - StartTesting
@@ -1731,8 +1720,10 @@ class MLJob():
     # 
     # This is a public procedure, it is called by the client.
     #####################################################
-    def RecordTestingResult(self, actualValue, predictedValue):
+    def RecordTestingResult(self, actualValue, predictedValue, subGroupNum):
         self.AllTestResults.RecordTestingResult(actualValue, predictedValue)
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            self.TestResultsSubgroupList[index].RecordTestingResult(actualValue, predictedValue)
     # End -  RecordTestingResult
 
 
@@ -2180,6 +2171,8 @@ class MLJob():
     #####################################################
     def ReadTestResultsFromXML(self, parentXMLNode):
         self.AllTestResults.ReadTestResultsFromXML()
+        for index in range(self.NumResultsSubgroups):
+            self.TestResultsSubgroupList[index].ReadTestResultsFromXML()
     # End - ReadTestResultsFromXML
 
 
@@ -2193,6 +2186,8 @@ class MLJob():
     #####################################################
     def WriteTestResultsToXML(self, parentXMLNode):
         self.AllTestResults.WriteTestResultsToXML()
+        for index in range(self.NumResultsSubgroups):
+            self.TestResultsSubgroupList[index].WriteTestResultsToXML()
     # End - WriteTestResultsToXML
 
 
@@ -2438,8 +2433,11 @@ class MLJob():
     #####################################################
     # [MLJob::GetNumSequencesTested
     #####################################################
-    def GetNumSequencesTested(self):
-        return(self.AllTestResults.NumSamplesTested)
+    def GetNumSequencesTested(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].NumSamplesTested
+        else:
+            return self.AllTestResults.NumSamplesTested
 
     #####################################################
     # [MLJob::GetAvgLossPerEpochList
@@ -2468,44 +2466,65 @@ class MLJob():
     #####################################################
     # [MLJob::GetTestResults
     #####################################################
-    def GetTestResults(self):
-        return self.AllTestResults.TestResults
+    def GetTestResults(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].TestResults
+        else:
+            return self.AllTestResults.TestResults
 
     #####################################################
     # [MLJob::GetTestNumItemsPerClass
     #####################################################
-    def GetTestNumItemsPerClass(self):
-        return self.AllTestResults.TestNumItemsPerClass
+    def GetTestNumItemsPerClass(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].TestNumItemsPerClass
+        else:
+            return self.AllTestResults.TestNumItemsPerClass
 
     #####################################################
     # [MLJob::GetROCAUC
     #####################################################
-    def GetROCAUC(self):
-        return self.AllTestResults.ROCAUC
+    def GetROCAUC(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].ROCAUC
+        else:
+            return self.AllTestResults.ROCAUC
 
     #####################################################
     # [MLJob::GetAUPRC
     #####################################################
-    def GetAUPRC(self):
-        return self.AllTestResults.AUPRC
+    def GetAUPRC(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].AUPRC
+        else:
+            return self.AllTestResults.AUPRC
 
     #####################################################
     # [MLJob::GetF1Score
     #####################################################
-    def GetF1Score(self):
-        return self.AllTestResults.F1Score
+    def GetF1Score(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].F1Score
+        else:
+            return self.AllTestResults.F1Score
 
     #####################################################
     # [MLJob::GetTestNumCorrectPerClass
     #####################################################
-    def GetTestNumCorrectPerClass(self):
-        return self.AllTestResults.TestNumCorrectPerClass
+    def GetTestNumCorrectPerClass(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].TestNumCorrectPerClass
+        else:
+            return self.AllTestResults.TestNumCorrectPerClass
 
     #####################################################
     # [MLJob::GetTestNumPredictionsPerClass
     #####################################################
-    def GetTestNumPredictionsPerClass(self):
-        return self.AllTestResults.TestNumPredictionsPerClass
+    def GetTestNumPredictionsPerClass(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].TestNumPredictionsPerClass
+        else:
+            return self.AllTestResults.TestNumPredictionsPerClass
 
     #####################################################
     # [MLJob::GetStartRequestTimeStr]
@@ -2522,15 +2541,20 @@ class MLJob():
     #####################################################
     # [MLJob::GetLogisticResultsTrueValueList]
     #####################################################
-    def GetLogisticResultsTrueValueList(self):
-        return self.AllTestResults.LogisticResultsTrueValueList
+    def GetLogisticResultsTrueValueList(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].LogisticResultsTrueValueList
+        else:
+            return self.AllTestResults.LogisticResultsTrueValueList
 
     #####################################################
     # [MLJob::GetLogisticResultsPredictedProbabilityList]
     #####################################################
-    def GetLogisticResultsPredictedProbabilityList(self):
-        return self.AllTestResults.LogisticResultsPredictedProbabilityList
-
+    def GetLogisticResultsPredictedProbabilityList(self, subGroupNum):
+        if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
+            return self.TestResultsSubgroupList[index].LogisticResultsPredictedProbabilityList
+        else:
+            return self.AllTestResults.LogisticResultsPredictedProbabilityList
 
     #####################################################
     #

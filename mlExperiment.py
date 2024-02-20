@@ -1319,9 +1319,8 @@ def MLExperiment_RunAndGraphAllJobsInDirectory(dirPathName,
         numSequencesTrainedPerEpoch = job.GetNumSequencesTrainedPerEpoch()
         numPatientsTrainedPerEpoch = job.GetNumPatientsTrainedPerEpoch()
         numDataPointsPerEpoch = job.GetNumDataPointsPerEpoch()
-        numSequencesTested = job.GetNumSequencesTested()
-        testResults = job.GetTestResults()
-        #testNumItemsPerClass = job.GetTestNumItemsPerClass()
+        numSequencesTested = job.GetNumSequencesTested(-1)
+        testResults = job.GetTestResults(-1)
         lossList = job.GetAvgLossPerEpochList()
         if (resultVar == ""):
             resultVar = job.GetNetworkOutputVarName()
