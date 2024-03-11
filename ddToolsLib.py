@@ -1,6 +1,6 @@
 ################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -238,7 +238,7 @@ def DDTools_ConvertSizeIntToStr(resultInt):
     resultFloat = round(resultFloat, 1)
     result = str(resultFloat) + suffix
 
-    return(result)
+    return result
 # End - DDTools_ConvertSizeIntToStr
 
 
@@ -253,7 +253,7 @@ def DDTools_ConvertSizeIntToStr(resultInt):
 def DDTools_GetFileSizeAsStr(filePath):
     resultInt = Path(filePath).stat().st_size
     result = DDTools_ConvertSizeIntToStr(resultInt)
-    return(result)
+    return result
 # End - DDTools_GetFileSizeAsStr
 
 
@@ -489,7 +489,7 @@ def DDTools_GetLocalSecret(secretName):
         return ""
 
     resultStr = dxml.XMLTools_GetTextContents(valueNode)
-    return(resultStr)
+    return resultStr
 # End - DDTools_GetLocalSecret
 
 

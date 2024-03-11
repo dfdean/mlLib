@@ -1,6 +1,6 @@
 #####################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -346,7 +346,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     'CefepimeDose': {'minVal': 1.0, 'maxVal': 8.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
     'CeftriaxoneDose': {'minVal': 1.0, 'maxVal': 4.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
     'Dapto': {'minVal': 50.0, 'maxVal': 600.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
-
     'IbupDose': {'minVal': 1.0, 'maxVal': 15.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
     'KetorDose': {'minVal': 1.0, 'maxVal': 15.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
     'NaproxDose': {'minVal': 1.0, 'maxVal': 15.0, 'dataType': TDF_DATA_TYPE_FLOAT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "zero", 'Calculated': False, 'VariableDependencies': ""},
@@ -383,7 +382,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     'Future_Boolean_RapidResponse': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureRapidResponseDate;InHospital"},
     'Future_Boolean_TransferIntoICU': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToICUDate;InHospital"},
     'Future_Boolean_TransferOutOfICU': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToWardDate;InHospital"},
-    'Future_Boolean_Intubation': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureIntubationDate;InHospital"},
     'Future_Boolean_CKD5': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD5Date"},
     'Future_Boolean_CKD4': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD4Date"},
     'Future_Boolean_CKD3b': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD3bDate"},
@@ -419,7 +417,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     'Future_Days_Until_RapidResponse': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureRapidResponseDate;InHospital"},
     'Future_Days_Until_TransferIntoICU': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToICUDate;InHospital"},
     'Future_Days_Until_TransferOutOfICU': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToWardDate;InHospital"},
-    'Future_Days_Until_Intubation': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureIntubationDate;InHospital"},
     'Future_Days_Until_CKD5': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD5Date"},
     'Future_Days_Until_CKD4': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD4Date"},
     'Future_Days_Until_CKD3b': {'minVal': 0.0, 'maxVal': 3650, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD3bDate"},
@@ -440,7 +437,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     'Future_Category_RapidResponse': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': ANY_EVENT_OR_VALUE, 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureRapidResponseDate;InHospital"},
     'Future_Category_TransferIntoICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': ANY_EVENT_OR_VALUE, 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToICUDate;InHospital"},
     'Future_Category_TransferOutOfICU': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': ANY_EVENT_OR_VALUE, 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InICU;NextFutureTransferToWardDate;InHospital"},
-    'Future_Category_Intubation': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': ANY_EVENT_OR_VALUE, 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "NextFutureIntubationDate;InHospital"},
     'Future_Category_CKD5': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 30, 'FuturePredictedValue': "GFR", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD5Date"},
     'Future_Category_CKD4': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 30, 'FuturePredictedValue': "GFR", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD4Date"},
     'Future_Category_CKD3b': {'minVal': 0.0, 'maxVal': TDF_MAX_FUTURE_EVENT_CATEGORY, 'dataType': TDF_DATA_TYPE_FUTURE_EVENT_CLASS, 'numFutureDaysNeeded': 30, 'FuturePredictedValue': "GFR", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "GFR;StartCKD3bDate"},
@@ -460,7 +456,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     ##############################
     # Events
     'HadDialysis': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "MostRecentDialysisDate"},
-    'HadIntubationDate': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "MostRecentIntubationDate"},
     'HadSurgery': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "MostRecentMajorSurgeryDate"},
     'Procedure': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_STRING_LIST, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "none", 'Calculated': False, 'VariableDependencies': ""},
     'Surgery': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_STRING_LIST, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "none", 'Calculated': False, 'VariableDependencies': ""},
@@ -545,7 +540,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
 
     'NextCrAtBaselineDate': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "Cr;BaselineCr"},
 
-    'NextFutureIntubationDate': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InHospital"},
     'NextAKIDate': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "Cr;InAKI;BaselineCr"},
     'Flag_HospitalAdmission': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "remove", 'Calculated': False, 'VariableDependencies': ""},
     'Flag_HospitalDischarge': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "remove", 'Calculated': False, 'VariableDependencies': ""},
@@ -557,9 +551,6 @@ g_LabValueInfo = {'Hgb': {'minVal': 3.0, 'maxVal': 17.0, 'dataType': TDF_DATA_TY
     'NextFutureTransferToWardDate': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': ";InICU"},
 
     'MostRecentDialysisDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': ""},
-    'MostRecentCardiacCathDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InHospital"},
-    'MostRecentIntubationDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InHospital"},
-    'MostRecentCABGDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InHospital"},
     'MostRecentMajorSurgeryDate': {'minVal': (18.0 * 365), 'maxVal': (90.0 * 365), 'dataType': TDF_DATA_TYPE_INT, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': "InHospital"},
 
     'NewLabs': {'minVal': 0.0, 'maxVal': 1.0, 'dataType': TDF_DATA_TYPE_BOOL, 'numFutureDaysNeeded': 0, 'FuturePredictedValue': "", 'ActionAfterEachTimePeriod': "", 'Calculated': False, 'VariableDependencies': ""}

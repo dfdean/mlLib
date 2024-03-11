@@ -1,6 +1,6 @@
 ################################################################################
 # 
-# Copyright (c) 2020-2023 Dawson Dean
+# Copyright (c) 2020-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -51,7 +51,7 @@ def XMLTools_ParseStringToDOM(xmlStr):
         print("xmlStr=[" + xmlStr + "]")
         domObj = None
 
-    return(domObj)
+    return domObj
 # XMLTools_ParseStringToDOM
 
 
@@ -69,7 +69,7 @@ def XMLTools_GetNamedElementInDocument(documentObj, nodeName):
         print("XMLTools_GetNamedElementInDocument. Required elements are missing: [" + nodeName + "]")
         elementNode = None
 
-    return(elementNode)
+    return elementNode
 # XMLTools_GetNamedElementInDocument
 
 
@@ -84,11 +84,11 @@ def XMLTools_GetNamedElementInDocument(documentObj, nodeName):
 ################################################################################
 def XMLTools_GetElementName(node):
     if (not node):
-        return("")
+        return ""
     if (node.nodeType != xml.dom.Node.ELEMENT_NODE): 
-        return("")
+        return ""
 
-    return(node.tagName)
+    return node.tagName
 # XMLTools_GetElementName
 
 
@@ -102,7 +102,7 @@ def XMLTools_GetElementName(node):
 ################################################################################
 def XMLTools_GetChildNode(parentNode, childName):
     if ((not parentNode) or (not childName)):
-        return(None)
+        return None
 
     # Normalize everything to lower case, so we can have a case-insensitive comparison.
     childName = childName.lower()
@@ -110,9 +110,9 @@ def XMLTools_GetChildNode(parentNode, childName):
     for childNode in parentNode.childNodes:
         if (childNode.nodeType == xml.dom.Node.ELEMENT_NODE): 
             if (childNode.tagName.lower() == childName):
-                return(childNode)
+                return childNode
 
-    return(None)
+    return None
 # XMLTools_GetChildNode
 
 
@@ -126,13 +126,13 @@ def XMLTools_GetChildNode(parentNode, childName):
 ################################################################################
 def XMLTools_IsLeafNode(parentNode):
     if (not parentNode):
-        return(False)
+        return False
 
     for childNode in parentNode.childNodes:
         if (childNode.nodeType == xml.dom.Node.ELEMENT_NODE): 
-            return(False)
+            return False
 
-    return(True)
+    return True
 # XMLTools_IsLeafNode
 
 
@@ -146,13 +146,13 @@ def XMLTools_IsLeafNode(parentNode):
 ################################################################################
 def XMLTools_GetFirstChildNode(parentNode):
     if (not parentNode):
-        return(None)
+        return None
 
     for childNode in parentNode.childNodes:
         if (childNode.nodeType == xml.dom.Node.ELEMENT_NODE): 
-            return(childNode)
+            return childNode
 
-    return(None)
+    return None
 # XMLTools_GetFirstChildNode
 
 
@@ -168,13 +168,13 @@ def XMLTools_GetLastChildNode(parentNode):
     resultNode = None
 
     if (not parentNode):
-        return(None)
+        return None
 
     for childNode in parentNode.childNodes:
         if (childNode.nodeType == xml.dom.Node.ELEMENT_NODE): 
             resultNode = childNode
 
-    return(resultNode)
+    return resultNode
 # XMLTools_GetLastChildNode
 
 
@@ -188,7 +188,7 @@ def XMLTools_GetLastChildNode(parentNode):
 ################################################################################
 def XMLTools_GetPeerNode(startNode, peerName):
     if ((not startNode) or (not peerName)):
-        return(None)
+        return None
 
     # Normalize everything to lower case, so we can have a case-insensitive comparison.
     peerName = peerName.lower()
@@ -198,12 +198,12 @@ def XMLTools_GetPeerNode(startNode, peerName):
         # Look further at elements of type html-object/tag
         if (peerElement.nodeType == xml.dom.Node.ELEMENT_NODE):
             if (peerElement.tagName.lower() == peerName):
-                return(peerElement)
+                return peerElement
 
         peerElement = peerElement.nextSibling
     # while (peerElement)
 
-    return(None)
+    return None
 # XMLTools_GetPeerNode
 
 
@@ -216,18 +216,18 @@ def XMLTools_GetPeerNode(startNode, peerName):
 ################################################################################
 def XMLTools_GetAnyPeerNode(startNode):
     if ((not startNode)):
-        return(None)
+        return None
 
     peerElement = startNode.nextSibling
     while (peerElement):
         # Look further at elements of type html-object/tag
         if (peerElement.nodeType == xml.dom.Node.ELEMENT_NODE):
-            return(peerElement)
+            return peerElement
 
         peerElement = peerElement.nextSibling
     # while (peerElement)
 
-    return(None)
+    return None
 # XMLTools_GetAnyPeerNode
 
 
@@ -241,18 +241,18 @@ def XMLTools_GetAnyPeerNode(startNode):
 ################################################################################
 def XMLTools_GetAnyPrevPeerNode(startNode):
     if (not startNode):
-        return(None)
+        return None
 
     peerElement = startNode.previousSibling
     while (peerElement):
         # Look further at elements of type html-object/tag
         if (peerElement.nodeType == xml.dom.Node.ELEMENT_NODE):
-            return(peerElement)
+            return peerElement
 
         peerElement = peerElement.previousSibling
     # while (peerElement)
 
-    return(None)
+    return None
 # XMLTools_GetAnyPrevPeerNode
 
 
@@ -266,7 +266,7 @@ def XMLTools_GetAnyPrevPeerNode(startNode):
 ################################################################################
 def XMLTools_GetAncestorNode(childNode, ancestorName):
     if ((not childNode) or (not ancestorName)):
-        return(None)
+        return None
 
     # Normalize everything to lower case, so we can have a case-insensitive comparison.
     ancestorName = ancestorName.lower()
@@ -276,12 +276,12 @@ def XMLTools_GetAncestorNode(childNode, ancestorName):
         # Look further at elements of type html-object/tag
         if (parentNode.nodeType == xml.dom.Node.ELEMENT_NODE):
             if (parentNode.tagName.lower() == ancestorName):
-                return(parentNode)
+                return parentNode
 
         parentNode = parentNode.parentNode
     # while (parentNode)
 
-    return(None)
+    return None
 # XMLTools_GetAncestorNode
 
 
@@ -296,7 +296,7 @@ def XMLTools_GetAncestorNode(childNode, ancestorName):
 ################################################################################
 def XMLTools_GetTextContents(parentNode):
     if (parentNode is None):
-        return("")
+        return ""
 
     resultBytes = ""
     currentNode = parentNode.firstChild
@@ -312,7 +312,7 @@ def XMLTools_GetTextContents(parentNode):
     resultStr = resultBytes
     # resultBytes.decode('utf-8')
 
-    return(resultStr)
+    return resultStr
 # End - XMLTools_GetTextContents
 
 
@@ -393,14 +393,14 @@ def XMLTools_RemoveAllWhitespace(parentNode):
 ################################################################################
 def XMLTools_GetOrCreateChildNode(parentNode, childName):
     if ((not parentNode) or (not childName)):
-        return(None)
+        return None
 
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
         childNode = parentNode.ownerDocument.createElement(childName)
         parentNode.appendChild(childNode)
 
-    return(childNode)
+    return childNode
 # XMLTools_GetOrCreateChildNode
 
 
@@ -414,12 +414,12 @@ def XMLTools_GetOrCreateChildNode(parentNode, childName):
 ################################################################################
 def XMLTools_AppendNewChildNode(parentNode, childName):
     if ((not parentNode) or (not childName)):
-        return(None)
+        return None
 
     childNode = parentNode.ownerDocument.createElement(childName)
     parentNode.appendChild(childNode)
 
-    return(childNode)
+    return childNode
 # XMLTools_AppendNewChildNode
 
 
@@ -456,13 +456,13 @@ def XMLTools_SetAttribute(elementNode, attrName, attrValue):
 ################################################################################
 def XMLTools_GetAttribute(elementNode, attrName):
     if ((not elementNode) or (not attrName)):
-        return("")
+        return ""
 
     resultStr = elementNode.getAttribute(attrName)
     if (resultStr is None):
         resultStr = ""
 
-    return(resultStr)
+    return resultStr
 # XMLTools_GetAttribute
 
 
@@ -491,10 +491,10 @@ def XMLTools_AddChildNodeWithText(parentNode, childName, textStr):
 def XMLTools_GetChildNodeText(parentNode, childName):
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
-        return("")
+        return ""
 
     textStr = XMLTools_GetTextContents(childNode)
-    return(textStr)
+    return textStr
 # XMLTools_GetChildNodeText
 
 
@@ -508,12 +508,12 @@ def XMLTools_GetChildNodeText(parentNode, childName):
 def XMLTools_GetChildNodeTextAsStr(parentNode, childName, defaultStr):
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
-        return(defaultStr)
+        return defaultStr
 
     textStr = XMLTools_GetTextContents(childNode)
     textStr = textStr.lstrip()
 
-    return(textStr)
+    return textStr
 # XMLTools_GetChildNodeTextAsStr
 
 
@@ -527,21 +527,21 @@ def XMLTools_GetChildNodeTextAsStr(parentNode, childName, defaultStr):
 def XMLTools_GetChildNodeTextAsInt(parentNode, childName, defaultVal):
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
-        return(defaultVal)
+        return defaultVal
 
     textStr = XMLTools_GetTextContents(childNode)
     if ((textStr is None) or (textStr == "")):
-        return(defaultVal)
+        return defaultVal
 
     textStr = textStr.lstrip()
     if ((textStr is None) or (textStr == "")):
-        return(defaultVal)
+        return defaultVal
 
     try:
         resultInt = int(textStr)
-        return(resultInt)
+        return resultInt
     except Exception:
-        return(defaultVal)
+        return defaultVal
 # XMLTools_GetChildNodeTextAsInt
 
 
@@ -555,23 +555,23 @@ def XMLTools_GetChildNodeTextAsInt(parentNode, childName, defaultVal):
 def XMLTools_GetChildNodeTextAsFloat(parentNode, childName, defaultVal):
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
-        return(defaultVal)
+        return defaultVal
 
     textStr = XMLTools_GetTextContents(childNode)
     textStr = textStr.lstrip()
 
     try:
         resultFloat = float(textStr)
-        return(resultFloat)
+        return resultFloat
     except Exception:
         pass
 
     try:
         resultInt = int(textStr)
         resultFloat = float(resultInt)
-        return(resultFloat)
+        return resultFloat
     except Exception:
-        return(defaultVal)
+        return defaultVal
 # XMLTools_GetChildNodeTextAsFloat
 
 
@@ -585,18 +585,18 @@ def XMLTools_GetChildNodeTextAsFloat(parentNode, childName, defaultVal):
 def XMLTools_GetChildNodeTextAsBool(parentNode, childName, defaultVal):
     childNode = XMLTools_GetChildNode(parentNode, childName)
     if (childNode is None):
-        return(defaultVal)
+        return defaultVal
 
     textStr = XMLTools_GetTextContents(childNode)
     textStr = textStr.lower().lstrip().rstrip()
 
     # We don't know what default is, so explicitly test for True and False.
     if (textStr in ("true", "1", "yes")):
-        return(True)
+        return True
     if (textStr in ("false", "0", "no")):
-        return(False)
+        return False
 
-    return(defaultVal)
+    return defaultVal
 # XMLTools_GetChildNodeTextAsBool
 
 

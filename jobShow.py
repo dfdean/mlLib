@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 ################################################################################
 # 
-# Copyright (c) 2022-2023 Dawson Dean
+# Copyright (c) 2022-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -27,7 +27,7 @@
 #
 ################################################################################
 import os
-import sys
+#import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -438,7 +438,7 @@ def GetJobValue(job, valueName, valueIndex):
     elif ((valueName == "accuracy") and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_BOOL) 
             and (numSequencesTested > 0)):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         totalAcc = float(testResults["NumCorrectPredictions"]) / float(numSequencesTested)
         return round((totalAcc * 100.0), 1)
     #########################
@@ -458,7 +458,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
 
         totalCorrect = float(testResults["NumCorrectPredictions"])
         totalCorrect += float(testResults["NumPredictionsWithin2Percent"])
@@ -470,7 +470,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
 
         totalCorrect = float(testResults["NumCorrectPredictions"])
         totalCorrect += float(testResults["NumPredictionsWithin2Percent"])
@@ -483,7 +483,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
 
         totalCorrect = float(testResults["NumCorrectPredictions"])
         totalCorrect += float(testResults["NumPredictionsWithin2Percent"])
@@ -497,7 +497,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
 
         totalCorrect = float(testResults["NumCorrectPredictions"])
         totalCorrect += float(testResults["NumPredictionsWithin2Percent"])
@@ -512,7 +512,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
 
         totalCorrect = float(testResults["NumCorrectPredictions"])
         totalCorrect += float(testResults["NumPredictionsWithin2Percent"])
@@ -528,7 +528,7 @@ def GetJobValue(job, valueName, valueIndex):
             and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
                 or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumCorrectPredictions"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -536,7 +536,7 @@ def GetJobValue(job, valueName, valueIndex):
         and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
             or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumPredictionsWithin2Percent"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -544,7 +544,7 @@ def GetJobValue(job, valueName, valueIndex):
         and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
             or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumPredictionsWithin5Percent"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -561,7 +561,7 @@ def GetJobValue(job, valueName, valueIndex):
         and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
             or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumPredictionsWithin20Percent"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -569,7 +569,7 @@ def GetJobValue(job, valueName, valueIndex):
         and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
             or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumPredictionsWithin50Percent"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -577,7 +577,7 @@ def GetJobValue(job, valueName, valueIndex):
         and ((job.GetResultValueType() == tdf.TDF_DATA_TYPE_INT) 
             or (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FLOAT))):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         resultValue = float(testResults["NumPredictionsWithin100Percent"]) / float(numSequencesTested)
         return round(resultValue * 100.0)
     #########################
@@ -585,7 +585,7 @@ def GetJobValue(job, valueName, valueIndex):
                and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS) 
                and (numSequencesTested > 0)):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         totalAcc = float(testResults["NumCorrectPredictions"]) / float(numSequencesTested)
         return round((totalAcc * 100.0), 1)
     #########################
@@ -593,7 +593,7 @@ def GetJobValue(job, valueName, valueIndex):
                and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS) 
                and (numSequencesTested > 0)):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         totalCloseAcc = float(testResults["NumPredictionsWithin1Class"]) / float(numSequencesTested)
         return round((totalCloseAcc * 100.0), 1)
     #########################
@@ -601,7 +601,7 @@ def GetJobValue(job, valueName, valueIndex):
             and (job.GetResultValueType() == tdf.TDF_DATA_TYPE_BOOL) 
             and (numSequencesTested > 0)):
         if (numSequencesTested <= 0):
-            return(0.0)
+            return 0.0
         totalAcc = float(testResults["NumCorrectPredictions"]) / float(numSequencesTested)
         return round((totalAcc * 100.0), 1)
 

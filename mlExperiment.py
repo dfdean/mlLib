@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 ################################################################################
 #
-# Copyright (c) 2023 Dawson Dean
+# Copyright (c) 2023-2024 Dawson Dean
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -657,58 +657,6 @@ class MLResultsFile():
 
     ################################################################################
     #
-    # [GetOneInputForOneOutput]
-    #
-    # A public procedure.
-    ################################################################################
-    def GetOneInputForOneOutput(self, outputName):
-        fDebug = False
-        resultFloat = tdf.TDF_INVALID_VALUE
-
-        # Make a list of input variables with their values
-        with open(self.resultFilePathName) as fileH:
-            fileH.seek(0)
-            resultLine = inputVarname + "~" + outputName + ":"
-            for line in fileH:
-                line = line.lstrip()
-                # <><><> Remove this when I both (1) fix existing data files (2) fix the generator code
-                #line = line.replace("::", ":")
-                if (line.startswith(resultLine)):
-                    if (fDebug):
-                        print("GetOneInputForOneOutput. Found inputVarname = " + inputVarname 
-                            + ", outputName = " + outputName 
-                            + ", resultLine=" + line)
-                    lineParts = line.split(':')
-                    if (len(lineParts) > 1):
-                        resultStr = lineParts[1].rstrip()
-                        if (fDebug):
-                            print("GetOneInputForOneOutput. resultStr = " + resultStr)
-                        try:
-                            resultFloat = float(resultStr)
-                        except Exception:
-                            print("BUG!!!! GetOneInputForOneOutput hit an exception when converting a number")
-                            print("           resultStr=" + str(resultStr))
-                            print("           line=" + str(line))
-                            sys.exit(0)
-                    # End - if (len(lineParts) > 1):
-
-                    # Stop looking when we find a value
-                    break
-                # End - if (line.startswith(resultLine)):               
-            # End - for line in fileH:
-
-            if ((math.isnan(resultFloat)) or (resultFloat == tdf.TDF_INVALID_VALUE)):
-                resultFloat = tdf.TDF_INVALID_VALUE
-         # End - with open(self.resultFilePathName) as fileH:
-
-        return resultFloat
-    # End - GetOneInputForOneOutput
-
-
-
-
-    ################################################################################
-    #
     # [MakeRelationshipBarGraphs]
     #
     ################################################################################
@@ -833,7 +781,7 @@ class MLResultsFile():
         if (fDebug):
             print("GraphTopNValuesForOneResult. inputValueDistList = " + str(inputValueDistList))
 
-         # Rank them from highest to lowest
+        # Rank them from highest to lowest
         sortedInputValueDistList = sorted(inputValueDistList, key=ImportanceDictionarySortFunction, reverse=True) 
         if (fDebug):
             print("GraphTopNValuesForOneResult. sortedInputValueDistList = " 
@@ -1032,7 +980,7 @@ class MLResultsFile():
         if (fDebug):
             print("WriteExcelFileForOneResult. inputValueDistList = " + str(inputValueDistList))
 
-         # Rank them from highest to lowest
+        # Rank them from highest to lowest
         sortedInputValueDistList = sorted(inputValueDistList, key=ImportanceDictionarySortFunction, reverse=True) 
         if (fDebug):
             print("WriteExcelFileForOneResult. sortedInputValueDistList = " 
@@ -1276,7 +1224,8 @@ def MLExperiment_RunAllJobsInDirectory(dirPathName):
 ################################################################################
 def MLExperiment_RunAndGraphAllJobsInDirectory(dirPathName, 
                                     accuracyGraphFilePathName,
-                                    countsGraphFilePathName):
+                                    countsGraphFilePathName,
+                                    fRecursive):
     fDebug = False
     if (fDebug):
         print("MLExperiment_RunAndGraphAllJobsInDirectory. dirPathName=" + dirPathName)
@@ -1303,9 +1252,22 @@ def MLExperiment_RunAndGraphAllJobsInDirectory(dirPathName,
         if (fDebug):
             print("MLExperiment_RunAndGraphAllJobsInDirectory. fileName = " + fileName 
                     + ", srcFilePathName = " + srcFilePathName)
-
-        if ((not os.path.exists(srcFilePathName)) or (not isfile(srcFilePathName))):
+        if (not os.path.exists(srcFilePathName)):
             continue
+
+        if (not isfile(srcFilePathName)):
+            fRecursiveOnThisDirectory = False
+            if ((fRecursive) and (not fileName.lower().startswith("skip "))):
+                fRecursiveOnThisDirectory = True
+
+            if (fRecursiveOnThisDirectory):
+                MLExperiment_RunAndGraphAllJobsInDirectory(srcFilePathName, 
+                                    accuracyGraphFilePathName,
+                                    countsGraphFilePathName,
+                                    fRecursive)
+            # Whether we recursed or not, we are done with this entry.
+            continue
+        # End - if (not isfile(srcFilePathName)):
 
         # Read the job
         jobErr, job = mlJob.MLJob_ReadExistingMLJob(srcFilePathName)
@@ -1359,11 +1321,13 @@ def MLExperiment_RunAndGraphAllJobsInDirectory(dirPathName,
 
     # Make a graph of the results from each job
     if (len(jobFileNameList) > 0):
+        accuracyGraphFilePathName = os.path.join(dirPathName, accuracyGraphFilePathName)
         DataShow.DrawBarGraph("Percent Predictions Within 10 Percent for " + resultVar, 
                           "Job File", jobFileNameList, 
                           "Percent Predictions Within 10 Percent", percentAccurateWithin10PercentList,
                           False, accuracyGraphFilePathName)
 
+        countsGraphFilePathName = os.path.join(dirPathName, countsGraphFilePathName)
         DataShow.DrawDoubleBarGraph("Num Data Points for " + resultVar,
                           "Job File", jobFileNameList, "", 
                           "Training Data", numDataPointsPerEpochList,
@@ -1390,8 +1354,7 @@ def MLExperiment_RunAllJobsInSpecificDirectories(dirPathName, subDirList):
     for subDirName in subDirList:
         subDirPathName = os.path.join(dirPathName, subDirName)
         if (fDebug):
-            print("MLExperiment_RunAllJobsInSpecificDirectories. fileName = " + fileName 
-                    + ", srcFilePathName = " + srcFilePathName)
+            print("MLExperiment_RunAllJobsInSpecificDirectories. subDirPathName = " + subDirPathName) 
 
         if (os.path.exists(subDirPathName)):
             MLExperiment_RunAllJobsInDirectory(subDirPathName)
@@ -1771,8 +1734,7 @@ def GetAccuracyForSingleInputAndOutputPair(fullInputName, outputName,
             or (len(totalTestInputList) == 0) or (len(totalTestOutputList) == 0)):
         score = 0
     ###################################################
-    elif ((outputLabInfo['dataType'] == tdf.TDF_DATA_TYPE_INT) 
-        or (outputLabInfo['dataType'] == tdf.TDF_DATA_TYPE_FLOAT)):
+    elif ((outputLabInfo['dataType'] == tdf.TDF_DATA_TYPE_INT) or (outputLabInfo['dataType'] == tdf.TDF_DATA_TYPE_FLOAT)):
         # Convert inputs to numpy.
         # LinearRegression.fit() takes 2 inputs of shape (n_samples, n_features)
         #   trainInputArray is a 2D Matrix with 1 column where each row has a single value

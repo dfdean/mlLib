@@ -37,14 +37,14 @@
 ################################################################################
 
 import os
-import sys
+#import sys
 import math
 import io
 import random
 import json
 
 # File ops
-from os.path import isfile  #, join
+#from os.path import isfile  #, join
 
 # Multiprocessing
 from torch.multiprocessing import Process
@@ -267,7 +267,7 @@ def MLEngine_SetArrayChecksum(job, linearUnit, hashName):
     # Must call clone() to force the data structures to get the latest version of the data
     # The optimizer seems to play games with multiple versions
     weightMatrix = linearUnit.weight.clone().detach().numpy()
-    biasVector = linearUnit.bias.clone().detach().numpy()
+    #biasVector = linearUnit.bias.clone().detach().numpy()
 
     job.SetArrayChecksum(weightMatrix, hashName)
 # End - MLEngine_SetArrayChecksum
@@ -284,7 +284,7 @@ def MLEngine_ArrayChecksumEqual(job, linearUnit, hashName, fExpectEqual):
     # Must call clone() to force the data structures to get the latest version of the data
     # The optimizer seems to play games with multiple versions
     weightMatrix = linearUnit.weight.clone().detach().numpy()
-    biasVector = linearUnit.bias.clone().detach().numpy()
+    #biasVector = linearUnit.bias.clone().detach().numpy()
 
     isEqual = job.CompareArrayChecksum(weightMatrix, hashName)
     if ((not isEqual) and (fExpectEqual)):
@@ -375,8 +375,6 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     # [MLEngine_SingleLayerNeuralNet.SaveNeuralNetstate]
     #####################################################
     def SaveNeuralNetstate(self, job):
-        fDebug = False
-
         # Save the matrix itself to the job.
         MLEngine_SaveLinearUnitToJob(self.inputToOutput, job, "inputToOutput")
 
@@ -444,7 +442,7 @@ class MLEngine_SingleLayerNeuralNet(nn.Module):
     #####################################################
     #####################################################
     def GetLibraryName(self):
-        return("Pytorch")
+        return "Pytorch"
 
     #####################################################
     #####################################################
@@ -736,8 +734,6 @@ class MLEngine_DeepNeuralNet(nn.Module):
     # so backward propagation can be done by the base class.
     #####################################################
     def forward(self, job, inputMatrix):
-        fDebug = False
-
         vec = inputMatrix
         combinedInput = None
 
@@ -975,7 +971,7 @@ class MLEngine_DeepNeuralNet(nn.Module):
                 # particularly at the beginning.
                 if (False):
                     weightMatrix = self.rnnStateLinearUnit.weight.detach().numpy()
-                    biasVector = self.rnnStateLinearUnit.bias.clone().detach().numpy()
+                    #biasVector = self.rnnStateLinearUnit.bias.clone().detach().numpy()
                     print("\n==========")
                     print("Fail Assert. Params=" + str(list(self.parameters())))
                     print("self.rnnStateLinearUnit=" + str(self.rnnStateLinearUnit))
@@ -1013,7 +1009,7 @@ class MLEngine_DeepNeuralNet(nn.Module):
     #####################################################
     #####################################################
     def GetLibraryName(self):
-        return("Pytorch")
+        return "Pytorch"
 
     #####################################################
     #####################################################
@@ -1143,6 +1139,7 @@ class MLEngine_LSTMNeuralNet(nn.Module):
         # One training sequence does not convey any information about 
         # another training sequence.
         # As a result, the order we train the input sequences does not matter.
+        sequenceSize = inputMatrix.size()[0]
         h0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
         c0 = torch.zeros(self.NumLayers, sequenceSize, self.RecurrentStateSize)
         recurrentState = (h0, c0)
@@ -1270,7 +1267,7 @@ class MLEngine_LSTMNeuralNet(nn.Module):
     #####################################################
     #####################################################
     def GetLibraryName(self):
-        return("Pytorch")
+        return "Pytorch"
 
     #####################################################
     #####################################################
@@ -1691,12 +1688,10 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
     predictedResultList = MLEngine_MakeListOfResults(job, output, numDataSamples, 
                                                      fUsePytorch, networkOutputDataType)
 
-
-
     # Compare predicted outputs to the ground-truth targets.
     # We store the results in the Job, and include lots of statistics like what
     # the accuracy was for different groups of result. 
-    fIsRNN = localNeuralNet.IsNetworkRecurrent(self)
+    fIsRNN = localNeuralNet.IsNetworkRecurrent()
     for index in range(numDataSamples):
         # Pytorch uses a 3rd dimension, for minibatches
         if (fAddMinibatchDimension):
@@ -1708,6 +1703,7 @@ def MLEngine_TestGroupOfDataPoints(job, localNeuralNet, fUsePytorch, cudaIsAvail
             subGroupNum = index
         else:
             subGroupNum = -1
+
         job.RecordTestingResult(trueResult, predictedResultList[index], subGroupNum)
     # End - for index in range(numDataSamples):
 # End - MLEngine_TestGroupOfDataPoints
@@ -1754,7 +1750,7 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
     # An int or float output is just the number.
     if (networkOutputDataType in (tdf.TDF_DATA_TYPE_FLOAT, tdf.TDF_DATA_TYPE_INT)):
         if (fUsePytorch):
-            predictedResultList = output[:,0,0].tolist()
+            predictedResultList = output[:, 0, 0].tolist()
         else:
             predictedResultList = output.tolist()
     # End - if (tdf.TDF_DATA_TYPE_FLOAT or tdf.TDF_DATA_TYPE_INT):
@@ -1765,10 +1761,10 @@ def MLEngine_MakeListOfResults(job, output, numDataSamples, fUsePytorch, network
         if (fUsePytorch):
             # Output is N x 1 x 1 where minibatch dim is 1 and there is also only 1 output, 
             # which is the result of the sigmoid.
-                predictedResultList[index] = output[:,0,0].tolist()
+            predictedResultList = output[:, 0, 0].tolist()
         else:
             # Output is vector of length N, the result of the sigmoid.
-            predictedResult = output.tolist()
+            predictedResultList = output.tolist()
         if (fDebug):
             print("MLEngine_MakeListOfResults. Logistic Network predictedResult: " + str(predictedResult))
     # End - if (isLogistic):
@@ -1840,7 +1836,7 @@ def MLEngine_PreflightOneFilePartitionImpl(job, currentPartitionStart, currentPa
     numTrainingPriorities = job.GetNumTrainingPriorities()
     # Warning! Dont use [ [] ] * PatientsForTrainingPriority
     # That makes a list containing the same sublist object numTrainingPriorities times
-    PatientsForTrainingPriority = [ [] for _ in range(numTrainingPriorities) ]
+    PatientsForTrainingPriority = [[] for _ in range(numTrainingPriorities)]
 
 
     #######################################
@@ -1853,12 +1849,12 @@ def MLEngine_PreflightOneFilePartitionImpl(job, currentPartitionStart, currentPa
     startPosFirstPatientInPartition = -1
     stopPosLastPatientInPartition = -1
     fFoundPatient, fEOF, startPatientPosInFile, stopPatientPosInFile = tdfReader.GotoFirstPatientInPartition(
-                                                                                    startPatientPosInFile, stopPatientPosInFile, 
-                                                                                    currentPartitionStart, currentPartitionStop,
-                                                                                    False)  # fOnlyFindPatientBoundaries
+                                                                            startPatientPosInFile, stopPatientPosInFile, 
+                                                                            currentPartitionStart, currentPartitionStop,
+                                                                            False)  # fOnlyFindPatientBoundaries
     while ((not fEOF) and (fFoundPatient)):
         # On Preflight, we create a list of the patient locations as well as the valid boundaries of the partition.
-        # Record where we found the first patient. We will return this as the start of the first patient in the partition.
+        # Record where we found the first patient. We return this as the start of the first patient in the partition.
         if (startPosFirstPatientInPartition < 0):
             startPosFirstPatientInPartition = startPatientPosInFile
         # We always save the stop of the patient, always overwriting the previour iteration.
@@ -2230,7 +2226,6 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr,
 
     if (fDebug):
         print("MLEngine_TrainOneFilePartitionInChildProcess start.")
-        print("     epochNum = " + str(epochNum))
         print("     currentPartitionStart = " + str(currentPartitionStart))
         print("     currentPartitionStop = " + str(currentPartitionStop))
 
@@ -2239,13 +2234,6 @@ def MLEngine_TrainOneFilePartitionInChildProcess(sendPipeEnd, jobStr,
 
     # Convert other strings passed accross address spaces to a runtime data structure.
     patientsForTrainingPriority = json.loads(patientsForTrainingPriorityStr)
-
-    # Get runtime options that must be set with each new process/address-space
-    testOptionsStr = job.GetRunOptionsStr()
-    if ((testOptionsStr is not None) and (testOptionsStr != "")):
-        testOptionList = testOptionsStr.split(tdf.VARIABLE_LIST_SEPARATOR)
-        TDF_SetTestOptions(testOptionList)
-    # End - if ((testOptionsStr is not None) and (testOptionsStr != "")):
 
     # Create the neural network in this address space.
     localNeuralNet = MLEngine_CreateNeuralNetFromJobSpec(job)
@@ -2393,13 +2381,6 @@ def MLEngine_TestOneFilePartitionInChildProcess(sendPipeEnd, jobStr, currentPart
     # Regenerate the runtime job object from its serialized string form. 
     job = mlJob.MLJob_CreateMLJobFromString(jobStr)
 
-    # Get runtime options that must be set with each new process/address-space
-    testOptionsStr = job.GetRunOptionsStr()
-    if ((testOptionsStr is not None) and (testOptionsStr != "")):
-        testOptionList = testOptionsStr.split(tdf.VARIABLE_LIST_SEPARATOR)
-        TDF_SetTestOptions(testOptionList)
-    # End - if ((testOptionsStr is not None) and (testOptionsStr != "")):
-
     # Create the neural network in this address space.
     localNeuralNet = MLEngine_CreateNeuralNetFromJobSpec(job)
     if (localNeuralNet is None):
@@ -2543,7 +2524,6 @@ def MLEngine_TrainNeuralNet(job, partitionSize):
             # On the first epoch, this is still being updated as we find the patient boundaries in the file.
             currentPartitionStart = partitionInfo['start']
             currentPartitionStop = partitionInfo['stop']
-            patientPositionListStr = partitionInfo['ptListStr']
             patientsForTrainingPriorityStr = partitionInfo['ptPriorityListStr']
 
             # Make a pipe that will be used to return the results. 
@@ -2728,13 +2708,6 @@ def MLEngine_RunJob(jobFilePathName, trainedJobFilePathName, fDebug):
     JobShow.JobShow_WriteReport(job, JobShow.MLJOB_LOG_REPORT, "")
     #JobShow.JobShow_WriteReport(job, MLJOB_FILE_REPORT, "/home/ddean/ddRoot/trainingResults.txt")
     #JobShow.JobShow_WriteReport(job, MLJOB_FILE_REPORT, "/home/ddean/ddRoot/trainingResults.csv")
-
-    # <><><><><><><><><> HACK 
-    # Question - Do we use every result or just the last result?????????
-    print("=============")
-    print("\n\nRNN BAIL! Inside MLEngine_RunJob()")
-    raise Exception()
-    # <><><><><><><><><> HACK 
 # End - MLEngine_RunJob
 
 
@@ -2761,7 +2734,6 @@ def MLEngine_ValidateTensor(testTensor):
             vec = testTensor[inputVecNum][0]
         else:
             vec = testTensor[inputVecNum]
-        numValues = len(vec)
 
         for currentValEntry in vec:
             currentVal = currentValEntry.item()

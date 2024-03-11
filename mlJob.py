@@ -1,4 +1,4 @@
-####################################################################################
+###################################################################################
 # 
 # Copyright (c) 2020-2024 Dawson Dean
 # 
@@ -230,7 +230,7 @@
 #####################################################################################
 import os
 import sys
-import time
+#import time
 import re
 from datetime import datetime
 import platform
@@ -252,7 +252,7 @@ from sklearn.metrics import precision_recall_curve
 # But, this .py file is always in the same directories as these imported modules.
 import xmlTools as dxml
 import tdfTools as tdf
-import dataShow as dataShow
+#import dataShow as dataShow
 
 
 NEWLINE_STR = "\n"
@@ -306,6 +306,12 @@ RUNTIME_START_ELEMENT_NAME = "StartRequestTimeStr"
 RUNTIME_STOP_ELEMENT_NAME = "StopRequestTimeStr"
 RUNTIME_CURRENT_EPOCH_ELEMENT_NAME = "CurrentEpochNum"
 RUNTIME_NONCE_ELEMENT_NAME = "Nonce"
+RUNTIME_OS_ELEMENT_NAME = "OS"
+RUNTIME_CPU_ELEMENT_NAME = "CPU"
+RUNTIME_GPU_ELEMENT_NAME = "GPU"
+RUNTIME_TOTAL_TRAINING_LOSS_CURRENT_EPOCH_ELEMENT_NAME = "TotalTrainingLossInCurrentEpoch"
+RUNTIME_NUM_TRAINING_LOSS_VALUES_CURRENT_EPOCH_ELEMENT_NAME = "NumTrainLossValuesCurrentEpoch"
+
 
 # <Results>
 RESULTS_ELEMENT_NAME = "Results"
@@ -359,7 +365,7 @@ NETWORK_MATRIX_LIST_NAME = "NeuralNetMatrixList"
 NETWORK_MATRIX_WEIGHT_MATRIX_NAME = "Weight"
 NETWORK_MATRIX_BIAS_VECTOR_NAME = "Bias"
 
-VALUE_FILTER_LIST_SEPARATOR = "{AND}"
+VALUE_FILTER_LIST_SEPARATOR = ".AND."
 
 MLJOB_MATRIX_FORMAT_ATTRIBUTE_NAME = "format"
 MLJOB_MATRIX_FORMAT_SIMPLE = "simple"
@@ -904,7 +910,8 @@ class MLJob():
                                                         RESULTS_TRAINING_ELEMENT_NAME)
         self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
                                                         RESULTS_TESTING_ELEMENT_NAME)
-        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, 
+                                                        RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
         for index in range(self.NumResultsSubgroups):
             testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
             self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
@@ -1072,18 +1079,24 @@ class MLJob():
         self.TrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, TRAINING_ELEMENT_NAME)
 
         self.ResultsXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RESULTS_ELEMENT_NAME)
-        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
-        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
-        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
-        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, 
+                                                RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
         for index in range(self.NumResultsSubgroups):
             testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
             self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
 
         self.RuntimeXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, RUNTIME_ELEMENT_NAME)
 
-        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, SAVED_MODEL_STATE_ELEMENT_NAME)
-        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, NETWORK_MATRIX_LIST_NAME)
+        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, 
+                                                        SAVED_MODEL_STATE_ELEMENT_NAME)
+        self.NeuralNetMatrixListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.SavedModelStateXMLNode, 
+                                                        NETWORK_MATRIX_LIST_NAME)
 
         self.NetworkType = self.GetNetworkType().lower()
         self.IsLogisticNetwork = dxml.XMLTools_GetChildNodeTextAsBool(self.NetworkLayersXMLNode, 
@@ -1092,7 +1105,7 @@ class MLJob():
         self.OutputThreshold = -1
         # The default is any probability over 50% is True. This is a coin-toss.
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.NetworkLayersXMLNode, 
-                                                                    NETWORK_OUTPUT_THRESHOLD_ELEMENT_NAME, "0.5")
+                                                NETWORK_OUTPUT_THRESHOLD_ELEMENT_NAME, "0.5")
         if ((resultStr is not None) and (resultStr != "")):
             try:
                 self.OutputThreshold = float(resultStr)
@@ -1226,8 +1239,11 @@ class MLJob():
         self.TrainingResultBucketSize = (valueRange / self.TrainingNumResultPriorities)
 
         listStr = dxml.XMLTools_GetChildNodeTextAsStr(valueInfoNode, TRAINING_PRIORITY_CLASS_PRIORITIES, "")
-        priorityStrList = listStr.split(",")
-        self.TrainingResultClassPriorities = [int(i) for i in priorityStrList]
+        if (listStr != ""):
+            priorityStrList = listStr.split(",")
+            self.TrainingResultClassPriorities = [int(i) for i in priorityStrList]
+        else:
+            self.TrainingResultClassPriorities = []
     # End - ReadTrainingConfigFromXML
 
 
@@ -1256,9 +1272,9 @@ class MLJob():
 
 
         self.TotalTrainingLossInCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, 
-                                                            "TotalTrainingLossInCurrentEpoch", -1.0)
+                                                            RUNTIME_TOTAL_TRAINING_LOSS_CURRENT_EPOCH_ELEMENT_NAME, -1.0)
         self.NumTrainLossValuesCurrentEpoch = dxml.XMLTools_GetChildNodeTextAsFloat(parentXMLNode, 
-                                                            "NumTrainLossValuesCurrentEpoch", -1.0)
+                                                            RUNTIME_NUM_TRAINING_LOSS_VALUES_CURRENT_EPOCH_ELEMENT_NAME, -1.0)
 
         ###################
         self.BufferedLogLines = dxml.XMLTools_GetChildNodeText(parentXMLNode, RUNTIME_LOG_NODE_ELEMENT_NAME)
@@ -1291,13 +1307,13 @@ class MLJob():
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_STOP_ELEMENT_NAME, str(self.StopRequestTimeStr))
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_CURRENT_EPOCH_ELEMENT_NAME, str(self.CurrentEpochNum))
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_NONCE_ELEMENT_NAME, str(self.RuntimeNonce))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "OS", str(platform.platform()))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "CPU", str(platform.processor()))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "GPU", "None")
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_OS_ELEMENT_NAME, str(platform.platform()))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_CPU_ELEMENT_NAME, str(platform.processor()))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_GPU_ELEMENT_NAME, "None")
 
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "TotalTrainingLossInCurrentEpoch", 
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_TOTAL_TRAINING_LOSS_CURRENT_EPOCH_ELEMENT_NAME, 
                                             str(self.TotalTrainingLossInCurrentEpoch))
-        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, "NumTrainLossValuesCurrentEpoch", 
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, RUNTIME_NUM_TRAINING_LOSS_VALUES_CURRENT_EPOCH_ELEMENT_NAME, 
                                             str(self.NumTrainLossValuesCurrentEpoch))
 
         ###################
@@ -1328,10 +1344,14 @@ class MLJob():
     def StartJobExecution(self):
         # Discard Previous results
         dxml.XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
-        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
-        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
-        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
-        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode,
+                                                    RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                    RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                    RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, 
+                                                    RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
         for index in range(self.NumResultsSubgroups):
             testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
             self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
@@ -1392,10 +1412,14 @@ class MLJob():
 
         # Remove earlier results. We will write the final results when we save the job to XML
         dxml.XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
-        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_PREFLIGHT_ELEMENT_NAME)
-        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TRAINING_ELEMENT_NAME)
-        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, RESULTS_TESTING_ELEMENT_NAME)
-        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                            RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                            RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                            RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, 
+                                                            RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
         for index in range(self.NumResultsSubgroups):
             testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
             self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
@@ -1567,7 +1591,7 @@ class MLJob():
         elif (self.ResultValueType in (tdf.TDF_DATA_TYPE_FUTURE_EVENT_CLASS, tdf.TDF_DATA_TYPE_BOOL)):
             return 0
         else:
-            return(0)
+            return 0
     # End - GetTrainingPriority
 
 
@@ -1716,14 +1740,20 @@ class MLJob():
 
     #####################################################
     #
-    # [MLJob::RecordTestingResult
+    # [MLJob::RecordTestingResult]
     # 
-    # This is a public procedure, it is called by the client.
+    # This is a for the job object. It calls the RecordTestingResult
+    # procedure for the approprate results bucket
     #####################################################
     def RecordTestingResult(self, actualValue, predictedValue, subGroupNum):
+        print(">>>> RecordTestingResult. subGroupNum=" + str(subGroupNum) + ", self.NumResultsSubgroups=" + str(self.NumResultsSubgroups))
+
+        # Every result will go into the totals bucket
         self.AllTestResults.RecordTestingResult(actualValue, predictedValue)
+
+        # If there is a subgroup, then we *also* add it to the results for that subgroup
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            self.TestResultsSubgroupList[index].RecordTestingResult(actualValue, predictedValue)
+            self.TestResultsSubgroupList[subGroupNum].RecordTestingResult(actualValue, predictedValue)
     # End -  RecordTestingResult
 
 
@@ -1891,7 +1921,7 @@ class MLJob():
             resultString = resultString[:-1]
             resultString = resultString + ROW_SEPARATOR_CHAR
 
-        return(resultString)
+        return resultString
     # End - MLJob_Convert2DMatrixToString
 
 
@@ -1966,7 +1996,7 @@ class MLJob():
             print("\n\nERROR! MLJob_ConvertStringTo2DMatrix. Underfilled the entire matrix. dimensionStr=[" + dimensionStr + "]")
             sys.exit(0)
 
-        return(newMatrix)
+        return newMatrix
     # End - MLJob_ConvertStringTo2DMatrix
 
 
@@ -2003,14 +2033,10 @@ class MLJob():
 
         ################################
         # Find the existing list of class weights
-        classWeightsListXMLNode = dxml.XMLTools_GetChildNode(self.ResultsPreflightXMLNode, RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
+        classWeightsListXMLNode = dxml.XMLTools_GetChildNode(self.ResultsPreflightXMLNode, 
+                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
         if (classWeightsListXMLNode is None):
             return
-
-        # Get the number of classes so we can easily rebuild the data structures when reading the job.
-        retrievedNumClasses = dxml.XMLTools_GetChildNodeTextAsInt(classWeightsListXMLNode, 
-                                                                  RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES, -1)
-        #if (retrievedNumClasses != self.NumResultClasses):
 
         # Make a new runtime object for each resultClass element
         self.PreflightResultClassWeights = [0] * self.NumResultClasses
@@ -2020,14 +2046,15 @@ class MLJob():
                                                         RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
         while (resultClassXMLNode is not None):
             resultClassID = dxml.XMLTools_GetChildNodeTextAsInt(resultClassXMLNode, 
-                                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, -1)
+                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, -1)
             classWeight = dxml.XMLTools_GetChildNodeTextAsFloat(resultClassXMLNode, 
-                                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE, -1)
+                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE,
+                                                    -1)
             if ((resultClassID >= 0) and (classWeight >= 0)):
                 self.PreflightResultClassWeights[resultClassID] = classWeight
         
             resultClassXMLNode = dxml.XMLTools_GetPeerNode(resultClassXMLNode, 
-                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
+                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
         # End - while (resultClassXMLNode is not None):
 
         self.FinishPreflight()
@@ -2162,8 +2189,6 @@ class MLJob():
 
 
 
-
-
     #####################################################
     #
     # [MLJob::ReadTestResultsFromXML
@@ -2174,9 +2199,6 @@ class MLJob():
         for index in range(self.NumResultsSubgroups):
             self.TestResultsSubgroupList[index].ReadTestResultsFromXML()
     # End - ReadTestResultsFromXML
-
-
-
 
 
     #####################################################
@@ -2295,8 +2317,8 @@ class MLJob():
     def GetNetworkType(self):
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.NetworkLayersXMLNode, NETWORK_TYPE_ELEMENT_NAME, "")
         if (resultStr is None):
-            return("")
-        return(resultStr)
+            return ""
+        return resultStr
     # End of GetNetworkType
             
 
@@ -2323,14 +2345,14 @@ class MLJob():
     def GetTrainingParamStr(self, valName, defaultVal):
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.TrainingXMLNode, valName, defaultVal)
         if ((resultStr is None) or (resultStr == "")):
-            return(defaultVal)
-        return(resultStr)
+            return defaultVal
+        return resultStr
 
     #####################################################
     # [MLJob::GetTrainingParamInt]
     #####################################################
     def GetTrainingParamInt(self, valName, defaultVal):
-        return(dxml.XMLTools_GetChildNodeTextAsInt(self.TrainingXMLNode, valName, defaultVal))
+        return dxml.XMLTools_GetChildNodeTextAsInt(self.TrainingXMLNode, valName, defaultVal)
 
     #####################################################
     # [MLJob::GetRunOptionsStr]
@@ -2350,19 +2372,19 @@ class MLJob():
     # [MLJob::GetNetworkLayerSpec]
     #####################################################
     def GetNetworkLayerSpec(self, name):
-        return(dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, name))
+        return dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, name)
 
     #####################################################
     # [MLJob::OKToUseGPU]
     #####################################################
     def OKToUseGPU(self):
-        return(self.AllowGPU)
+        return self.AllowGPU
 
     #####################################################
     # [MLJob::GetDebug]
     #####################################################
     def GetDebug(self):
-        return(self.Debug)
+        return self.Debug
 
     #####################################################
     # [MLJob::GetIsLogisticNetwork]
@@ -2374,31 +2396,31 @@ class MLJob():
     # [MLJob::GetEpochNum]
     #####################################################
     def GetEpochNum(self):
-        return(self.CurrentEpochNum)
+        return self.CurrentEpochNum
 
     #####################################################
     # [MLJob::GetResultValueType]
     #####################################################
     def GetResultValueType(self):
-        return(self.ResultValueType)
+        return self.ResultValueType
 
     #####################################################
     # [MLJob::GetNumResultClasses]
     #####################################################
     def GetNumResultClasses(self):
-        return(self.NumResultClasses)
+        return self.NumResultClasses
 
     #####################################################
     # [MLJob::GetNumSequencesTrainedPerEpoch
     #####################################################
     def GetNumSequencesTrainedPerEpoch(self):
-        return(self.NumSamplesTrainedPerEpoch)
+        return self.NumSamplesTrainedPerEpoch
 
     #####################################################
     # [MLJob::GetNumPatientsSkippedPerEpoch
     #####################################################
     def GetNumPatientsSkippedPerEpoch(self):
-        return(self.NumPatientsSkippedPerEpoch)
+        return self.NumPatientsSkippedPerEpoch
 
     #####################################################
     # [MLJob::SetNumPatientsSkippedPerEpoch
@@ -2410,7 +2432,7 @@ class MLJob():
     # [MLJob::GetNumPatientsTrainedPerEpoch
     #####################################################
     def GetNumPatientsTrainedPerEpoch(self):
-        return(self.NumPatientsTrainedPerEpoch)
+        return self.NumPatientsTrainedPerEpoch
 
     #####################################################
     # [MLJob::SetNumPatientsTrainedPerEpoch
@@ -2422,7 +2444,7 @@ class MLJob():
     # [MLJob::GetNumDataPointsPerEpoch
     #####################################################
     def GetNumDataPointsPerEpoch(self):
-        return(self.NumDataPointsTrainedPerEpoch)
+        return self.NumDataPointsTrainedPerEpoch
 
     #####################################################
     # [MLJob::SetNumDataPointsPerEpoch
@@ -2435,7 +2457,7 @@ class MLJob():
     #####################################################
     def GetNumSequencesTested(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].NumSamplesTested
+            return self.TestResultsSubgroupList[subGroupNum].NumSamplesTested
         else:
             return self.AllTestResults.NumSamplesTested
 
@@ -2468,7 +2490,7 @@ class MLJob():
     #####################################################
     def GetTestResults(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].TestResults
+            return self.TestResultsSubgroupList[subGroupNum].TestResults
         else:
             return self.AllTestResults.TestResults
 
@@ -2477,7 +2499,7 @@ class MLJob():
     #####################################################
     def GetTestNumItemsPerClass(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].TestNumItemsPerClass
+            return self.TestResultsSubgroupList[subGroupNum].TestNumItemsPerClass
         else:
             return self.AllTestResults.TestNumItemsPerClass
 
@@ -2486,7 +2508,7 @@ class MLJob():
     #####################################################
     def GetROCAUC(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].ROCAUC
+            return self.TestResultsSubgroupList[subGroupNum].ROCAUC
         else:
             return self.AllTestResults.ROCAUC
 
@@ -2495,7 +2517,7 @@ class MLJob():
     #####################################################
     def GetAUPRC(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].AUPRC
+            return self.TestResultsSubgroupList[subGroupNum].AUPRC
         else:
             return self.AllTestResults.AUPRC
 
@@ -2504,7 +2526,7 @@ class MLJob():
     #####################################################
     def GetF1Score(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].F1Score
+            return self.TestResultsSubgroupList[subGroupNum].F1Score
         else:
             return self.AllTestResults.F1Score
 
@@ -2513,7 +2535,7 @@ class MLJob():
     #####################################################
     def GetTestNumCorrectPerClass(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].TestNumCorrectPerClass
+            return self.TestResultsSubgroupList[subGroupNum].TestNumCorrectPerClass
         else:
             return self.AllTestResults.TestNumCorrectPerClass
 
@@ -2522,7 +2544,7 @@ class MLJob():
     #####################################################
     def GetTestNumPredictionsPerClass(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].TestNumPredictionsPerClass
+            return self.TestResultsSubgroupList[subGroupNum].TestNumPredictionsPerClass
         else:
             return self.AllTestResults.TestNumPredictionsPerClass
 
@@ -2530,20 +2552,20 @@ class MLJob():
     # [MLJob::GetStartRequestTimeStr]
     #####################################################
     def GetStartRequestTimeStr(self):
-        return(self.StartRequestTimeStr)
+        return self.StartRequestTimeStr
 
     #####################################################
     # [MLJob::GetStopRequestTimeStr]
     #####################################################
     def GetStopRequestTimeStr(self):
-        return(self.StopRequestTimeStr)
+        return self.StopRequestTimeStr
 
     #####################################################
     # [MLJob::GetLogisticResultsTrueValueList]
     #####################################################
     def GetLogisticResultsTrueValueList(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].LogisticResultsTrueValueList
+            return self.TestResultsSubgroupList[subGroupNum].LogisticResultsTrueValueList
         else:
             return self.AllTestResults.LogisticResultsTrueValueList
 
@@ -2552,7 +2574,7 @@ class MLJob():
     #####################################################
     def GetLogisticResultsPredictedProbabilityList(self, subGroupNum):
         if ((subGroupNum >= 0) and (subGroupNum < self.NumResultsSubgroups)):
-            return self.TestResultsSubgroupList[index].LogisticResultsPredictedProbabilityList
+            return self.TestResultsSubgroupList[subGroupNum].LogisticResultsPredictedProbabilityList
         else:
             return self.AllTestResults.LogisticResultsPredictedProbabilityList
 
@@ -2565,14 +2587,14 @@ class MLJob():
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(self.NetworkLayersXMLNode, 
                                             NETWORK_STATE_SIZE_ELEMENT_NAME, "")
         if ((resultStr is None) or (resultStr == "")):
-            return(0)
+            return 0
 
         try:
             resultInt = int(resultStr)
         except Exception:
             resultInt = 0
 
-        return(resultInt)
+        return resultInt
     # End of GetNetworkStateSize
 
 
@@ -2585,18 +2607,18 @@ class MLJob():
     def GetNetworkInputVarNames(self):
         inputLayerXMLNode = dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, "InputLayer")
         if (inputLayerXMLNode is None):
-            return("")
+            return ""
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(inputLayerXMLNode, "InputValues", "")
         if (resultStr is None):
-            return("")
+            return ""
 
         # Allow whitespace to be sprinkled around the file. Later the parsing code
         # assumes no unnecessary whitespace is present, but don't be that strict with the file format.
         resultStr = resultStr.replace(' ', '')
 
         #print("GetNetworkInputVarNames. resultStr=" + resultStr)
-        return(resultStr)
+        return resultStr
     # End of GetNetworkInputVarNames
 
 
@@ -2613,29 +2635,26 @@ class MLJob():
             # Allow whitespace to be sprinkled around the file. Later the parsing code
             # assumes no unnecessary whitespace is present, but don't be that strict with the file format.
             resultStr = resultStr.replace(' ', '')
-
-            #print("GetNetworkOutputVarName. resultStr=" + resultStr)
-            return(resultStr)
+            return resultStr
         # End - if ((resultStr is not None) and (resultStr != ""))
-
 
         # Otherwise, look in the old, legacy places.
         outputLayerXMLNode = dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, "OutputLayer")
         if (outputLayerXMLNode is None):
             outputLayerXMLNode = dxml.XMLTools_GetChildNode(self.NetworkLayersXMLNode, "InputLayer")
         if (outputLayerXMLNode is None):
-            return("")
+            return ""
 
         resultStr = dxml.XMLTools_GetChildNodeTextAsStr(outputLayerXMLNode, "ResultValue", "")
         if (resultStr is None):
-            return("")
+            return ""
 
         # Allow whitespace to be sprinkled around the file. Later the parsing code
         # assumes no unnecessary whitespace is present, but don't be that strict with the file format.
         resultStr = resultStr.replace(' ', '')
 
         #print("GetNetworkOutputVarName. resultStr=" + resultStr)
-        return(resultStr)
+        return resultStr
     # End of GetNetworkOutputVarName
 
 
@@ -2665,14 +2684,14 @@ class MLJob():
     def GetJobControlStr(self, valName, defaultVal):
         xmlNode = dxml.XMLTools_GetChildNode(self.JobControlXMLNode, valName)
         if (xmlNode is None):
-            return(defaultVal)
+            return defaultVal
 
         resultStr = dxml.XMLTools_GetTextContents(xmlNode)
         resultStr = resultStr.lstrip()
         if ((resultStr is None) or (resultStr == "")):
-            return(defaultVal)
+            return defaultVal
 
-        return(resultStr)
+        return resultStr
     # End of GetJobControlStr
 
 
@@ -2709,14 +2728,14 @@ class MLJob():
     def GetDataParam(self, valName, defaultVal):
         xmlNode = dxml.XMLTools_GetChildNode(self.DataXMLNode, valName)
         if (xmlNode is None):
-            return(defaultVal)
+            return defaultVal
 
         resultStr = dxml.XMLTools_GetTextContents(xmlNode)
         resultStr = resultStr.lstrip()
         if ((resultStr is None) or (resultStr == "")):
-            return(defaultVal)
+            return defaultVal
 
-        return(resultStr)
+        return resultStr
     # End of GetDataParam
 
 
@@ -2857,7 +2876,7 @@ class MLJob():
             print("Compare hash " + hashName + ", Saved=" + str(self.HashDict[hashName]) + ", Expect=" + newHashVal)
 
         isEqual = (newHashVal == self.HashDict[hashName])
-        return(isEqual)
+        return isEqual
     # End - CompareArrayChecksum
 
 
@@ -2872,14 +2891,13 @@ class MLJob():
     def ComputeArrayChecksum(self, inputArray):
         if (numpy.isnan(inputArray).any()):
             print("ERROR!:\nComputeArrayChecksum passed an Invalid Array")
-            print("ComputeArrayChecksum. hashName = " + str(hashName))
             print("ComputeArrayChecksum. inputArray = " + str(inputArray))
             print("Exiting process...")
             raise Exception()
 
         rawByteArray = inputArray.tobytes('C')
         newHashVal = hashlib.sha256(rawByteArray).hexdigest()
-        return(newHashVal)
+        return newHashVal
     # End - ComputeArrayChecksum
 
 
@@ -2892,9 +2910,55 @@ class MLJob():
     def GetSavedArrayChecksum(self, hashName):
         if (hashName not in self.HashDict):
             return "NOT IN DICTIONARY"
-        return(self.HashDict[hashName])
+        return self.HashDict[hashName]
     # End - GetSavedArrayChecksum
 
+
+    #####################################################
+    #
+    # [MLJob::ResetRunStatus]
+    #
+    #####################################################
+    def ResetRunStatus(self):
+        # Discard Previous results
+        dxml.XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
+        self.ResultsPreflightXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                                    RESULTS_PREFLIGHT_ELEMENT_NAME)
+        self.ResultsTrainingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                                    RESULTS_TRAINING_ELEMENT_NAME)
+        self.ResultsTestingXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsXMLNode, 
+                                                            RESULTS_TESTING_ELEMENT_NAME)
+        self.AllTestResults.InitResultsXML(self.ResultsTestingXMLNode, 
+                                                            RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME)
+        for index in range(self.NumResultsSubgroups):
+            testGroupName = RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME + str(index)
+            self.TestResultsSubgroupList[index].InitResultsXML(self.ResultsTestingXMLNode, testGroupName)
+
+        # Each request has a single test. When we finish the test, we have
+        # finished the entire reqeust.
+        self.SetJobControlStr(JOBCTL_STATUS_ELEMENT_NAME, MLJOB_STATUS_IDLE)
+        self.SetJobControlStr(JOBCTL_RESULT_MSG_ELEMENT_NAME, "")
+        self.SetJobControlStr(JOBCTL_ERROR_CODE_ELEMENT_NAME, str(JOB_E_NO_ERROR))
+
+        # Remove the Runtime state
+        dxml.XMLTools_RemoveAllChildNodes(self.RuntimeXMLNode)
+
+        # Discard previous results
+        dxml.XMLTools_RemoveAllChildNodes(self.ResultsXMLNode)
+
+        # Discard previous saved matrices
+        dxml.XMLTools_RemoveAllChildNodes(self.SavedModelStateXMLNode)
+        self.SavedModelStateXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.RootXMLNode, 
+                                                        SAVED_MODEL_STATE_ELEMENT_NAME)
+
+        # Reset the log file if there is one.
+        if (self.LogFilePathname != ""):
+            try:
+                os.remove(self.LogFilePathname) 
+            except Exception:
+                pass
+        # End - if (self.LogFilePathname != ""):
+    # End of ResetRunStatus
 
 
 # End - class MLJob
@@ -2919,7 +2983,7 @@ def MLJob_Convert1DVectorToString(inputArray):
     resultString = resultString[:-1]
     resultString = resultString + ROW_SEPARATOR_CHAR
 
-    return(resultString)
+    return resultString
 # End - MLJob_Convert1DVectorToString
 
 
@@ -2964,7 +3028,7 @@ def MLJob_ConvertStringTo1DVector(vectorStr):
                 colNum += 1
     # End - for singleRowStr in matrixValueStrList:
 
-    return(newVector)
+    return newVector
 # End - MLJob_ConvertStringTo1DVector
 
 

@@ -413,7 +413,7 @@ def TDF_Log(message):
 #
 ################################################################################
 def TDF_GetLog():
-    return(g_TDF_Log_Buffer)
+    return g_TDF_Log_Buffer
 # End - TDF_GetLog
 
 
@@ -599,7 +599,7 @@ def TDF_ConvertDateToTDFTimeStamp(dateYear, dateMonth, dateDayOfMonth, birthDate
         print("TDF_ConvertDateToTDFTimeStamp: birthDateYear = " + str(birthDateYear))
         print("TDF_ConvertDateToTDFTimeStamp: birthDateMonth = " + str(birthDateMonth))
         print("TDF_ConvertDateToTDFTimeStamp: birthDateDayOfMonth = " + str(birthDateDayOfMonth))
-        return("")
+        return ""
 
     result = TDF_MakeTimeStamp(deltaDays, dateHours, dateMin)
     return result
@@ -850,7 +850,7 @@ class TDFFileWriter():
         valueStr = valueStr.replace("-", "")
         valueStr = valueStr.replace(" ", "")
 
-        if ((DEBUG_WRITER) and((">" in valueStr) or ("<" in valueStr))):
+        if ((DEBUG_WRITER) and ((">" in valueStr) or ("<" in valueStr))):
             print("ERROR!!!!! WriteDataNode is trying to write a str with illegal char")
             print("valueStr = [" + valueStr + "]")
             sys.exit(0)
@@ -996,7 +996,7 @@ class TDFFileWriter():
     def AppendNameValuePairToStr(self, totalStr, name, valueStr):
         if ((name is None) or (valueStr is None)):
             print("Error. AppendNameValuePairToStr discarding NONE name or value str")
-            return(totalStr)
+            return totalStr
 
         #name = name.lstrip()
         #valueStr = valueStr.lstrip()
@@ -1010,18 +1010,18 @@ class TDFFileWriter():
 
         if (name == ""):
             print("Error. AppendNameValuePairToStr discarding empty name str")
-            return(totalStr)    
+            return totalStr    
 
         if (valueStr == ""):
             print("Error. AppendNameValuePairToStr discarding empty value str")
-            return(totalStr)    
+            return totalStr    
 
         try:
             # Lint gets upset that I do not use this, but I am only doing it to check the conversion works.
             dummyFloatVal = float(valueStr)
         except Exception:
             print("Error. AppendNameValuePairToStr discarding non-numeric valueStr: " + str(valueStr))
-            return(totalStr)    
+            return totalStr    
 
         totalStr = totalStr + name + "=" + valueStr + ","
 
@@ -1030,7 +1030,7 @@ class TDFFileWriter():
             print("totalStr = [" + totalStr + "]")
             sys.exit(0)
 
-        return(totalStr)
+        return totalStr
     # End - AppendNameValuePairToStr
 
 # End - class TDFFileWriter
@@ -1056,14 +1056,14 @@ class TDFFileWriter():
 def TDFFileWriter_AppendMedInfoToStr(totalStr, drugName, doseStr, doseRoute, dosesPerDayStr):
     if ((drugName is None) or (drugName == "") or (totalStr is None)):
         print("Error. TDFFileWriter_AppendMedInfoToStr discarding NONE name or value str")
-        return(totalStr)
+        return totalStr
 
     try:
         # Lint gets upset that I do not use this, but I am only doing it to check the conversion works.
         dummyFloatVal = float(doseStr)
     except Exception:
         print("Error. TDFFileWriter_AppendMedInfoToStr discarding non-numeric doseStr: " + str(doseStr))
-        return(totalStr)
+        return totalStr
 
     if (doseRoute == ""):
         doseRoute = "o"
@@ -1077,14 +1077,14 @@ def TDFFileWriter_AppendMedInfoToStr(totalStr, drugName, doseStr, doseRoute, dos
             dummyDosesPerDayInt = float(dosesPerDayStr)
         except Exception:
             print("Error. TDFFileWriter_AppendMedInfoToStr discarding non-numeric dosesPerDayStr: " + str(dosesPerDayStr))
-            return(totalStr)    
+            return totalStr
     # End - if (dosesPerDayStr != ""):
     if (dosesPerDayStr == ""):
         dosesPerDayStr = "1"
 
 
     totalStr = totalStr + drugName + ":" + doseStr + ":" + doseRoute + ":" + dosesPerDayStr + ","
-    return(totalStr)
+    return totalStr
 # End - TDFFileWriter_AppendMedInfoToStr
 
 
@@ -1103,10 +1103,10 @@ def TDFFileWriter_AppendMedInfoToStr(totalStr, drugName, doseStr, doseRoute, dos
 def TDFFileWriter_AppendProcInfoToStr(totalStr, procSubType, cptCode):
     if ((procSubType is None) or (procSubType == "") or (totalStr is None)):
         print("Error. TDFFileWriter_AppendProcInfoToStr discarding NONE name or value str")
-        return(totalStr)
+        return totalStr
 
     totalStr = totalStr + procSubType + ":" + cptCode + ","
-    return(totalStr)
+    return totalStr
 # End - TDFFileWriter_AppendProcInfoToStr
 
 
@@ -1180,12 +1180,9 @@ class TDFFileReader():
         self.baselineCrSeries = None
 
         self.NextFutureDischargeDate = TDF_INVALID_VALUE
-        self.NextFutureIntubationDate = TDF_INVALID_VALUE
         self.NextFutureRapidResponseDate = TDF_INVALID_VALUE
         self.NextFutureTransferToICUDate = TDF_INVALID_VALUE
         self.NextFutureTransferToWardDate = TDF_INVALID_VALUE
-
-        self.NewMedsForCurrentDay = {}
 
         ###################
         self.ParseVariableList(inputNameListStr, resultValueName, requirePropertyNameList)
@@ -1469,7 +1466,7 @@ class TDFFileReader():
         # Add the PatientList element.
         resultStr = resultStr + "<PatientList>"
 
-        return(resultStr)
+        return resultStr
     # End of GetRawXMLStrForHeader
 
 
@@ -1483,7 +1480,7 @@ class TDFFileReader():
     #####################################################
     def GetRawXMLStrForFooter(self):
         footerStr = "\n\n</PatientList>\n</TDF>\n\n"
-        return(footerStr)
+        return footerStr
     # End of GetRawXMLStrForFooter
 
 
@@ -1499,7 +1496,7 @@ class TDFFileReader():
     def GetRawXMLStrForFirstPatient(self):
         fFoundPatient, _, _, _ = self.GotoFirstPatientEx(True)
         if (not fFoundPatient):
-            return("")
+            return ""
 
         return self.currentPatientNodeStr
     # End - GetRawXMLStrForFirstPatient(self)
@@ -1517,13 +1514,13 @@ class TDFFileReader():
     def GetRawXMLStrForNextPatient(self):
         fFoundPatient, fEOF, _, _ = self.ReadNextPatientXMLStrImpl(TDF_INVALID_VALUE)
         if ((not fFoundPatient) or (fEOF)):
-            return(None)
+            return None
 
         # We parse so the reader will also be able to examine properties in the patient.
         # This lets us split a large file by properties
         fFoundPatient = self.ParseCurrentPatientImpl()
         if ((not fFoundPatient) or (fEOF)):
-            return(None)
+            return None
 
         return self.currentPatientNodeStr
     # End - GetRawXMLStrForNextPatient(self)
@@ -1540,7 +1537,7 @@ class TDFFileReader():
     # [TDFFileReader::GetNumInputValues]
     #####################################################
     def GetNumInputValues(self):
-        return(self.numInputValues)
+        return self.numInputValues
 
     #####################################################
     # [TDFFileReader::GetFileDescriptionStr]
@@ -1548,7 +1545,7 @@ class TDFFileReader():
     #####################################################
     def GetFileDescriptionStr(self, valueName):
         xmlStr = dxml.XMLTools_GetChildNodeTextAsStr(self.headerNode, valueName, "")
-        return(xmlStr)
+        return xmlStr
     # End of GetFileDescriptionStr
 
 
@@ -1564,7 +1561,7 @@ class TDFFileReader():
     #####################################################
     def GotoFirstPatient(self):
         fFoundPatient, _, _, _ = self.GotoFirstPatientEx(False)
-        return(fFoundPatient)
+        return fFoundPatient
     # End - GotoFirstPatient
 
 
@@ -1717,8 +1714,8 @@ class TDFFileReader():
         fEOF = False
 
         if (fDebug):
-            print("GotoFirstPatientInPartition. startPartition=" + str(startPartition) + 
-                    ", stopPartition=" + str(stopPartition))
+            print("GotoFirstPatientInPartition. startPartition=" + str(startPartition))
+            print("     stopPartition=" + str(stopPartition))
 
         # If we already know the position of the patient, then just read
         # it. We don't need to find it.
@@ -2128,13 +2125,9 @@ class TDFFileReader():
             self.baselineCrSeries = timefunc.CTimeSeries(7)
 
         self.NextFutureDischargeDate = TDF_INVALID_VALUE
-        self.NextFutureIntubationDate = TDF_INVALID_VALUE
         self.NextFutureRapidResponseDate = TDF_INVALID_VALUE
         self.NextFutureTransferToICUDate = TDF_INVALID_VALUE
         self.NextFutureTransferToWardDate = TDF_INVALID_VALUE
-
-        # Initialize the daily med list for the forward pass.            
-        self.NewMedsForCurrentDay = {}
 
         # <> BUGBUG FIXME
         # These are used in the forward pass to fix a bug in TDF files.
@@ -2217,8 +2210,8 @@ class TDFFileReader():
                 reuseLatestData = True
             # Events reuse the most recent data point if it is in the same day and hour
             elif ((nodeType == "e")
-                    and (self.latestTimeLineEntryTimeDays == labDateDays)
-                    and (self.latestTimeLineEntryTimeDays >= 0)):
+                    and (self.latestTimeLineEntryTimeDays >= 0)
+                    and (self.latestTimeLineEntryTimeDays == labDateDays)):
                 reuseLatestData = True
 
             #<>if (not self.fCarryForwardPreviousDataValues):
@@ -2233,13 +2226,6 @@ class TDFFileReader():
                 timelineEntry = self.latestTimeLineEntry
             else:
                 # Otherwise, we are starting a new timeline entry.
-                # If we are starting a new day, first finish out the previous day by adding
-                # everything to the last entry of the previous day.
-                if ((self.latestTimeLineEntryTimeDays >= 0) and (self.latestTimeLineEntry is not None) 
-                        and (labDateDays != self.latestTimeLineEntryTimeDays)):
-                    self.AddFinalEventsToFinishCurrentDay()
-                # End of closing out a day.
-
                 # Make a new time slot. 
                 currentTimelinePointID += 1
                 timelineEntry = {'TimeDays': labDateDays, 'TID': currentTimelinePointID}
@@ -2290,7 +2276,7 @@ class TDFFileReader():
                 self.ProcessDataNodeForwardImpl(currentNode, labDateDays)
 
             ###################################
-            # Compute "SPECIAL" calculated values
+            # Compute SPECIAL calculated values
             # However, other calculated values are computed when we compile the timeline, before the reverse pass.
             # This allows them to be used for future predictions, like GFR is needed to compute Days_Until_CKD4. 
             # This means a few special values (like MELD and GFR) need to be done in the forward
@@ -2303,16 +2289,9 @@ class TDFFileReader():
                 # End - for labInfoIndex, labInfo in enumerate(self.allValuesLabInfoList):
             # End - if (self.allValuesLabInfoList is not None):
 
-            # ASSERT(Util_DictsEqual(timelineEntry['data'], self.latestTimelineEntryDataList))
-
             # Go to the next XML node in the TDF
             currentNode = dxml.XMLTools_GetAnyPeerNode(currentNode)
         # End - while (currentNode):
-
-        # Set all meds for the last day in the timeline.
-        if ((self.latestTimeLineEntryTimeDays >= 0) and (self.latestTimeLineEntry is not None)): 
-            self.AddFinalEventsToFinishCurrentDay()
-        # End of closing out a day.
 
         self.LastTimeLineIndex = len(self.CompiledTimeline) - 1        
 
@@ -2365,43 +2344,6 @@ class TDFFileReader():
             timeLineIndex = timeLineIndex - 1
         # End - for timeLineIndex in range(self.LastTimeLineIndex + 1):
     # End - CompilePatientTimelineImpl(self)
-
-
-
-
-
-
-    ################################################################################
-    #
-    # [TDFFileReader::AddFinalEventsToFinishCurrentDay]
-    #
-    ################################################################################
-    def AddFinalEventsToFinishCurrentDay(self):
-        fDebug = False
-
-        # At the end of each day, we update the list of medications.
-        # Drug events happen when a drug is ordered, not each time it is given.
-        # Moreover, a drug may be given BID or TID, so we want the total daily dose.
-        # So, we simulate you give the whole dose at the end of the day. Really, this
-        # is the total-daily-dose.
-        #
-        # We update the list of daily meds any time a new order.
-        # All meds from day N should be entered on the same day. This is a big deal for 
-        # clinics where two adjacent days in the timeline may really be months apart in calendar time.
-        # Values in self.NewMedsForCurrentDay are the complete dose for a single day.
-
-        # Copy the daily med lists to the timeline
-        timeLineData = self.latestTimeLineEntry['data']
-        for _, (medName, medDose) in enumerate(self.NewMedsForCurrentDay.items()):
-            if (medName in self.allValueVarNameList):
-                if (fDebug):
-                    print("AddFinalEventsToFinishCurrentDay. medName=" + medName + ", medDose=" + str(medDose))
-                timeLineData[medName] = medDose
-        # End - for _, (medName, medDose) in enumerate(self.NewMedsForCurrentDay.items()):
-
-        # Reset the list of new med additions for the new day we are about to start.
-        self.NewMedsForCurrentDay = {}
-    # End - AddFinalEventsToFinishCurrentDay(self)
 
 
 
@@ -2926,12 +2868,6 @@ class TDFFileReader():
             ############
             if ((eventValue == "Dialysis") and ('MostRecentDialysisDate' in self.allValueVarNameList)):
                 self.latestTimelineEntryDataList['MostRecentDialysisDate'] = eventDateDays
-            ############
-            elif ((eventValue == "CardiacCath") and ('MostRecentCardiacCathDate' in self.allValueVarNameList)):
-                self.latestTimelineEntryDataList['MostRecentCardiacCathDate'] = eventDateDays
-            ############
-            elif ((eventValue == "Intubation") and ('MostRecentIntubationDate' in self.allValueVarNameList)):
-                self.latestTimelineEntryDataList['MostRecentIntubationDate'] = eventDateDays
 
         ############################################
         elif (eventClass == "Surg"):
@@ -2943,9 +2879,7 @@ class TDFFileReader():
             if ('Surgery' in self.allValueVarNameList):
                 self.latestTimelineEntryDataList['Surgery'] = eventValue
 
-            if ((eventValue == "Major/Cardiac/CABG") and ('MostRecentCABGDate' in self.allValueVarNameList)):
-                self.latestTimelineEntryDataList['MostRecentCABGDate'] = eventDateDays
-            elif ((eventValue.startswith("Major")) and ('MostRecentMajorSurgeryDate' in self.allValueVarNameList)):
+            if ((eventValue.startswith("Major")) and ('MostRecentMajorSurgeryDate' in self.allValueVarNameList)):
                 self.latestTimelineEntryDataList['MostRecentMajorSurgeryDate'] = eventDateDays
 
         ############################################
@@ -2987,10 +2921,11 @@ class TDFFileReader():
                     numNameParts = len(medNameAndDoseParts)
                     if (fDebug):
                         print("ProcessEventNodeForwardImpl. Found Interesting Med. medName=" + medName)
-                        print("ProcessEventNodeForwardImpl. Found Interesting Med. drugInfo=" + drugInfo)
-                        print("ProcessEventNodeForwardImpl. Found Interesting Med. numNameParts=" + str(numNameParts))
+                        print("      drugInfo=" + drugInfo)
+                        print("      numNameParts=" + str(numNameParts))
 
-                    # drugName + ":" + doseStr + ":" + doseRoute + ":" + dosesPerDayStr + ","
+                    # The string drugInfo has for format:
+                    #   medName + ":" + doseStr + ":" + doseRoute + ":" + dosesPerDayStr + ","
                     if (numNameParts >= 4):
                         dosesPerDayStr = int(medNameAndDoseParts[3])
                         doseRoute = medNameAndDoseParts[2]
@@ -3029,11 +2964,8 @@ class TDFFileReader():
                                         + ", drugInfo=" + drugInfo)
                     else:
                         # Add this to the daily total. Some meds may be given daily, or Q12h or Q8h.
-                        # We use the total daily dose for each day.
-                        if (medName in self.NewMedsForCurrentDay):
-                            self.NewMedsForCurrentDay[medName] += (doseFloat * dosesPerDayStr)
-                        else:
-                            self.NewMedsForCurrentDay[medName] = (doseFloat * dosesPerDayStr)
+                        # We use the total daily dose for each day. It was initialized to 0 when we started each new day
+                        self.latestTimelineEntryDataList[medName] += (doseFloat * dosesPerDayStr)
                         if (fDebug):
                             print("ProcessEventNodeForwardImpl. medName=" + medName + ", doseStr=" + doseStr)
                             print("            doseRoute=" + doseRoute + ", dosesPerDayStr=" + str(dosesPerDayStr))
@@ -3754,28 +3686,6 @@ class TDFFileReader():
             if (('InHospital' in reversePassTimeLineData) and (reversePassTimeLineData['InHospital'] > 0) and (self.NextFutureTransferToWardDate > 0)):
                 reversePassTimeLineData["Future_Boolean_TransferOutOfICU"] = 1
         # End - if (self.NextFutureTransferToWardDate > 0):
-
-        ##############################################
-        # Intubation
-        if ("Future_Days_Until_Intubation" in self.allValueVarNameList):
-            reversePassTimeLineData["Future_Days_Until_Intubation"] = TDF_INVALID_VALUE
-            if (('InHospital' in reversePassTimeLineData) and (reversePassTimeLineData['InHospital'] > 0) and (self.NextFutureIntubationDate > 0)):
-                daysUntilEvent = max((self.NextFutureIntubationDate - currentDayNum), 0)
-                reversePassTimeLineData["Future_Days_Until_Intubation"] = daysUntilEvent
-        # End - if (self.NextFutureIntubationDate > 0):
-
-        if ("Future_Category_Intubation" in self.allValueVarNameList):
-            reversePassTimeLineData["Future_Category_Intubation"] = TDF_FUTURE_EVENT_CATEGORY_NOT_IN_10YRS
-            if (('InHospital' in reversePassTimeLineData) and (reversePassTimeLineData['InHospital'] > 0) and (self.NextFutureIntubationDate > 0)):
-                reversePassTimeLineData["Future_Category_Intubation"] = self.ComputeOutcomeCategory(currentDayNum, self.NextFutureIntubationDate)
-        # End - if (self.NextFutureIntubationDate > 0):
-
-        if ("Future_Boolean_Intubation" in self.allValueVarNameList):
-            reversePassTimeLineData["Future_Boolean_Intubation"] = 0
-            if (('InHospital' in reversePassTimeLineData) and (reversePassTimeLineData['InHospital'] > 0) and (self.NextFutureIntubationDate > 0)):
-                reversePassTimeLineData["Future_Boolean_Intubation"] = 1
-        # End - if (self.NextFutureIntubationDate > 0):
-
     # End - CalculateAllDerivedValuesREVERSEPass
 
 
@@ -3799,7 +3709,6 @@ class TDFFileReader():
         #####################
         if (eventClass == "Admit"):
             self.NextFutureDischargeDate = TDF_INVALID_VALUE
-            self.NextFutureIntubationDate = TDF_INVALID_VALUE
             self.NextFutureRapidResponseDate = TDF_INVALID_VALUE
             self.NextFutureTransferToICUDate = TDF_INVALID_VALUE
             self.NextFutureTransferToWardDate = TDF_INVALID_VALUE
@@ -3807,7 +3716,6 @@ class TDFFileReader():
         elif (eventClass == "Discharge"):
             #print("Discharge Event in reverse pass")
             self.NextFutureDischargeDate = eventDateDays
-            self.NextFutureIntubationDate = TDF_INVALID_VALUE
             self.NextFutureRapidResponseDate = TDF_INVALID_VALUE
             self.NextFutureTransferToICUDate = TDF_INVALID_VALUE
             self.NextFutureTransferToWardDate = TDF_INVALID_VALUE
@@ -3829,11 +3737,6 @@ class TDFFileReader():
         #####################
         elif (eventClass == "RapidResponse"):
             self.NextFutureRapidResponseDate = eventDateDays
-        #####################
-        elif (eventClass == "Proc"):
-            eventValue = eventNode.getAttribute("V")
-            if (eventValue == "proc/Intubation"):
-                self.NextFutureIntubationDate = eventDateDays
     # End - ProcessEventNodeInReverseImpl
 
 
@@ -4065,7 +3968,7 @@ class TDFFileReader():
                 # End - if (valueName in labValueDict):
 
                 currentTimeLineIndex = currentTimeLineIndex - 1
-           # End - while ((currentTimeLineIndex >= 0) and ...
+            # End - while ((currentTimeLineIndex >= 0) and ...
         # End - if (firstDayInRange > lastDayNumInRange):
         ############################
         # Otherwise, search forward.
@@ -4122,13 +4025,13 @@ class TDFFileReader():
             if (valueName not in latestValues):
                 if (fDebug):
                     print("CheckIfCurrentTimeMeetsCriteria. valueName=" + str(valueName) + " is not in list")
-                return(False)
+                return False
 
             actualVal = latestValues[valueName]
             if ((actualVal == TDF_INVALID_VALUE) or (actualVal <= TDF_SMALLEST_VALID_VALUE)):
                 if (fDebug):
                     print("CheckIfCurrentTimeMeetsCriteria. valueName=" + str(valueName) + " is not valid")
-                return(False)
+                return False
 
             targetVal = float(propertyValueList[propNum])
             relationName = propertyRelationList[propNum]
@@ -4141,7 +4044,7 @@ class TDFFileReader():
                 labInfo = g_LabValueInfo[valueName]
             except Exception:
                 print("Error! CheckIfCurrentTimeMeetsCriteria found undefined lab name: " + valueName)
-                return(False)
+                return False
             dataTypeName = labInfo['dataType']
             if (fDebug):
                 print("CheckIfCurrentTimeMeetsCriteria: dataTypeName=" + str(dataTypeName))
@@ -4151,49 +4054,49 @@ class TDFFileReader():
             ###############
             if (relationName == ".EQ."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) != float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) != int(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName == TDF_DATA_TYPE_BOOL) and (int(actualVal) != int(targetVal))):
-                    return(False)
+                    return False
             ###############
             elif (relationName == ".NEQ."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) == float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) == int(targetVal))):
-                    return(False)
+                    return False
             ###############
             elif (relationName == ".LT."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) >= float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) >= int(targetVal))):
-                    return(False)
+                    return False
             ###############
             elif (relationName == ".LTE."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) > float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) > int(targetVal))):
-                    return(False)
+                    return False
             ###############
             elif (relationName == ".GT."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) <= float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) <= int(targetVal))):
-                    return(False)
+                    return False
             ###############
             elif (relationName == ".GTE."):
                 if ((dataTypeName == TDF_DATA_TYPE_FLOAT) and (float(actualVal) < float(targetVal))):
-                    return(False)
+                    return False
                 elif ((dataTypeName in (TDF_DATA_TYPE_INT, TDF_DATA_TYPE_FUTURE_EVENT_CLASS)) and (int(actualVal) < int(targetVal))):
-                    return(False)
+                    return False
             ###############
             else:
-                return(False)
+                return False
         # End - for propNum in range(numProperties):
 
         if (fDebug):
             print("CheckIfCurrentTimeMeetsCriteria: targetVal does indeed match required value")
-        return(True)
+        return True
     # End - CheckIfCurrentTimeMeetsCriteria
 
 
@@ -4243,8 +4146,6 @@ class TDFFileReader():
             if (fDebug):
                 print("GetDataForCurrentPatient, No data. firstTimelineIndex=" + str(firstTimelineIndex))
             return 0, None, None
-
-        #ASSERT((firstTimelineIndex == 0) and (lastTimelineIndex == self.LastTimeLineIndex)):
 
         # Count the max possible number of complete data nodes.
         # We may return less than this, but this lets us allocate result storage.
@@ -4309,7 +4210,6 @@ class TDFFileReader():
             # We set the time resolution when we compile the timeline.
             # That will copy values forward, and also overwrite values from the same time interval.
             # This assumes that each entry in the timeline is a different returned result.
-            latestValues = timelineEntry['data']
             foundAllInputs = True
             matchingRangeDay = -1
             for valueIndex in range(self.numInputValues):
@@ -4358,7 +4258,7 @@ class TDFFileReader():
                         inputArray[numReturnedDataSets][valueIndex] = result
                 except Exception:
                     print("GetDataForCurrentPatient. EXCEPTION when writing one value")
-                    print("     valueName=" + valueName + ", fOverwriteLatestLabs=" + str(fOverwriteLatestLabs))
+                    print("     valueName=" + valueName)
                     print("     fAddMinibatchDimension=" + str(fAddMinibatchDimension))
                     print("     numReturnedDataSets=" + str(numReturnedDataSets) + ", valueIndex=" + str(valueIndex))
                     print("     maxNumCompleteLabSets=" + str(maxNumCompleteLabSets) + ", self.numInputValues=" + str(self.numInputValues))
@@ -4529,7 +4429,6 @@ class TDFFileReader():
             # Check if this is a timeline entry we care about.
             # For example, we may only care about labs while a patient is in the hospital,
             # or labes for a patient with a minimal level of kidney disease.
-            latestValues = timelineEntry['data']
             if (numRequireProperties > 0):
                 foundNewValue = self.CheckIfCurrentTimeMeetsCriteria(requirePropertyRelationList,
                                                                     requirePropertyNameList,
@@ -4740,7 +4639,7 @@ class TDFFileReader():
 
         timelineEntry = self.CompiledTimeline[timeLineIndex]
         currentDayNum = timelineEntry['TimeDays']
-        currentMinuteInDay = 0   # timelineEntry['TimeIntervalNum'] * self.MinutesPerTimelineEntry
+        # currentMinuteInDay = timelineEntry['TimeIntervalNum'] * self.MinutesPerTimelineEntry
         currentHour = 0   # currentMinuteInDay / 60
         currentMin = 0   # currentMinuteInDay - (currentHour * 60)
         
@@ -4772,35 +4671,35 @@ class TDFFileReader():
     def ComputeOutcomeCategory(self, currentDate, outcomeDate):
         # 13 = EVENT will NOT happen in the next 10yrs
         if (outcomeDate < 0):
-            return(TDF_FUTURE_EVENT_CATEGORY_NOT_IN_10YRS)
+            return TDF_FUTURE_EVENT_CATEGORY_NOT_IN_10YRS
 
         # 0 = EVENT is happening now or has previously happened
         daysUntilOutcome = outcomeDate - currentDate
         if (daysUntilOutcome <= 0):
-            return(TDF_FUTURE_EVENT_CATEGORY_NOW_OR_PAST)
+            return TDF_FUTURE_EVENT_CATEGORY_NOW_OR_PAST
 
         # 1 = EVENT will happen in 1 day
         if (daysUntilOutcome <= 1):
-            return(TDF_FUTURE_EVENT_CATEGORY_IN_1_DAY)
+            return TDF_FUTURE_EVENT_CATEGORY_IN_1_DAY
 
         # 3 = EVENT will happen in 7 days
         if (daysUntilOutcome <= 7):
-            return(TDF_FUTURE_EVENT_CATEGORY_IN_7_DAYS)
+            return TDF_FUTURE_EVENT_CATEGORY_IN_7_DAYS
 
         # 5 = EVENT will happen in 30 days
         if (daysUntilOutcome <= 30):
-            return(TDF_FUTURE_EVENT_CATEGORY_IN_30_DAYS)
+            return TDF_FUTURE_EVENT_CATEGORY_IN_30_DAYS
 
         # 8 = EVENT will happen in 365 days
         if (daysUntilOutcome <= 365):
-            return(TDF_FUTURE_EVENT_CATEGORY_IN_365_DAYS)
+            return TDF_FUTURE_EVENT_CATEGORY_IN_365_DAYS
 
         # 12 = EVENT will happen in 3650 days (10yrs)  (10yrs, Framingham uses this)
         if (daysUntilOutcome <= 3650):
-            return(TDF_FUTURE_EVENT_CATEGORY_IN_3650_DAYS)
+            return TDF_FUTURE_EVENT_CATEGORY_IN_3650_DAYS
 
         # 13 = EVENT will NOT happen in the next 10yrs
-        return(TDF_FUTURE_EVENT_CATEGORY_NOT_IN_10YRS)
+        return TDF_FUTURE_EVENT_CATEGORY_NOT_IN_10YRS
     # End - ComputeOutcomeCategory
 
 
@@ -4982,7 +4881,7 @@ def TDF_GetVariableType(fullValueName):
     labInfo, _, _, _, _, functionName = TDF_ParseOneVariableName(fullValueName)
     if (labInfo is None):
         #print("Error! TDF_GetVariableType found undefined lab name: " + fullValueName)
-        return(TDF_DATA_TYPE_UNKNOWN)
+        return TDF_DATA_TYPE_UNKNOWN
 
     # If the functionName is not NULL, then use that to determine the type
     if ((functionName is not None) and (functionName in g_FunctionInfo)):
@@ -4994,7 +4893,7 @@ def TDF_GetVariableType(fullValueName):
     # End - if ((functionName is not None) and (functionName in g_FunctionInfo)):
 
     dataType = labInfo['dataType']
-    return(dataType)
+    return dataType
 # End - TDF_GetVariableType
 
 
@@ -5026,17 +4925,17 @@ def TDF_GetNumClassesForVariable(fullValueName):
     labInfo, _, _, _, _, _ = TDF_ParseOneVariableName(fullValueName)
     if (labInfo is None):
         print("Error! TDF_GetNumClassesForVariable found undefined lab name: " + fullValueName)
-        return(1)
+        return 1
 
     # A boolean is treated like a 2-class category variable.
     if (labInfo['dataType'] == TDF_DATA_TYPE_BOOL):
         numVals = 2
     elif (labInfo['dataType'] == TDF_DATA_TYPE_FUTURE_EVENT_CLASS):
-        return(TDF_NUM_FUTURE_EVENT_CATEGORIES)
+        return TDF_NUM_FUTURE_EVENT_CATEGORIES
     else:
         numVals = 1
 
-    return(numVals)
+    return numVals
 # End - TDF_GetNumClassesForVariable
 
 
@@ -5048,7 +4947,6 @@ def TDF_GetNumClassesForVariable(fullValueName):
 #
 #####################################################
 def TDF_ParseOneVariableName(valueName):
-    fDebug = False
     labInfo = None
     valueOffsetStartRange = 0
     valueOffsetStopRange = 0
@@ -5091,7 +4989,6 @@ def TDF_ParseOneVariableName(valueName):
 
         # Parse any range options.
         if (valueOffsetStr.startswith(VARIABLE_RANGE_LAST_MATCH_MARKER)):
-            fDebug = True
             valueOffsetRangeOption = VARIABLE_RANGE_LAST_MATCH
             valueOffsetStr = valueOffsetStr[1:]
 
@@ -5141,7 +5038,7 @@ def TDF_NormalizeInputValue(labValue, minVal, maxVal):
         normalFloatValue = 0.0
 
     resultVal = round(normalFloatValue * 100.0, 2)
-    return(resultVal)
+    return resultVal
 # End - TDF_NormalizeInputValue
 
 
