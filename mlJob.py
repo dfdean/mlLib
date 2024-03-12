@@ -334,6 +334,10 @@ RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE = "ClassWeight"
 # <Results><TestingResults>
 RESULTS_TEST_ALL_TESTS_GROUP_XML_ELEMENT_NAME = "AllTests"
 RESULTS_TEST_TEST_SUBGROUP_XML_ELEMENT_NAME = "TestSubGroup"
+RESULTS_TEST_NUM_GROUPS_ELEMENT_NAME = "NumSubgroups"
+RESULTS_TEST_GROUP_MEANING_XML_ELEMENT_NAME = "SubgroupMeaning"
+DEFAULT_TEST_GROUP_MEANING = "SeqLength"
+DEFAULT_NUM_TEST_SUBGROUPS = 10
 
 RESULTS_TEST_NUM_ITEMS_ELEMENT_NAME = "NumSequences"
 RESULTS_TEST_NUM_ITEMS_PER_CLASS_ELEMENT_NAME = "NumItemsPerClass"
@@ -399,6 +403,7 @@ DEBUG_EVENT_TIMELINE_LOSS           = "Loss"
 DEBUG_EVENT_OUTPUT_AVG              = "Out.avg"
 DEBUG_EVENT_NONLINEAR_OUTPUT_AVG    = "NLOut.avg"
 
+CALCULATE_TRAINING_WEIGHTS_DURING_PREFLIGHT = False
 
 
 ################################################################################
@@ -799,7 +804,8 @@ class MLJob():
         self.ResultsTestingXMLNode = None
 
         self.AllTestResults = MLJobTestResults()
-        self.NumResultsSubgroups = 10
+        self.NumResultsSubgroups = DEFAULT_NUM_TEST_SUBGROUPS
+        self.SubgroupMeaning = DEFAULT_TEST_GROUP_MEANING
         self.TestResultsSubgroupList = []
         for index in range(self.NumResultsSubgroups):
             self.TestResultsSubgroupList.append(MLJobTestResults())
@@ -1542,6 +1548,9 @@ class MLJob():
     # 
     #####################################################
     def FinishPreflight(self):
+        if (len(self.PreflightInputRanges) == 0):
+            return
+
         for inputNum in range(self.numInputVars):
             self.PreflightInputRanges[inputNum] = self.PreflightInputMaxs[inputNum] - self.PreflightInputMins[inputNum]
         # End - for inputNum in range(self.numInputVars):
@@ -1746,7 +1755,7 @@ class MLJob():
     # procedure for the approprate results bucket
     #####################################################
     def RecordTestingResult(self, actualValue, predictedValue, subGroupNum):
-        print(">>>> RecordTestingResult. subGroupNum=" + str(subGroupNum) + ", self.NumResultsSubgroups=" + str(self.NumResultsSubgroups))
+        #print(">>>> RecordTestingResult. subGroupNum=" + str(subGroupNum) + ", self.NumResultsSubgroups=" + str(self.NumResultsSubgroups))
 
         # Every result will go into the totals bucket
         self.AllTestResults.RecordTestingResult(actualValue, predictedValue)
@@ -2035,27 +2044,27 @@ class MLJob():
         # Find the existing list of class weights
         classWeightsListXMLNode = dxml.XMLTools_GetChildNode(self.ResultsPreflightXMLNode, 
                                                 RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
-        if (classWeightsListXMLNode is None):
-            return
+        if (classWeightsListXMLNode is not None):
+            # Make a new runtime object for each resultClass element
+            self.PreflightResultClassWeights = [0] * self.NumResultClasses
 
-        # Make a new runtime object for each resultClass element
-        self.PreflightResultClassWeights = [0] * self.NumResultClasses
+            # Read each resultClass
+            resultClassXMLNode = dxml.XMLTools_GetChildNode(classWeightsListXMLNode, 
+                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
+            while (resultClassXMLNode is not None):
+                resultClassID = dxml.XMLTools_GetChildNodeTextAsInt(resultClassXMLNode, 
+                                                        RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, -1)
+                classWeight = dxml.XMLTools_GetChildNodeTextAsFloat(resultClassXMLNode, 
+                                                        RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE,
+                                                        -1)
+                if ((resultClassID >= 0) and (classWeight >= 0)):
+                    self.PreflightResultClassWeights[resultClassID] = classWeight
 
-        # Read each resultClass
-        resultClassXMLNode = dxml.XMLTools_GetChildNode(classWeightsListXMLNode, 
+                resultClassXMLNode = dxml.XMLTools_GetPeerNode(resultClassXMLNode, 
                                                         RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
-        while (resultClassXMLNode is not None):
-            resultClassID = dxml.XMLTools_GetChildNodeTextAsInt(resultClassXMLNode, 
-                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, -1)
-            classWeight = dxml.XMLTools_GetChildNodeTextAsFloat(resultClassXMLNode, 
-                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE,
-                                                    -1)
-            if ((resultClassID >= 0) and (classWeight >= 0)):
-                self.PreflightResultClassWeights[resultClassID] = classWeight
-        
-            resultClassXMLNode = dxml.XMLTools_GetPeerNode(resultClassXMLNode, 
-                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
-        # End - while (resultClassXMLNode is not None):
+            # End - while (resultClassXMLNode is not None):
+        else:   # if (classWeightsListXMLNode is not None):
+            self.PreflightResultClassWeights = []
 
         self.FinishPreflight()
     # End - ReadPreflightResultsFromXML
@@ -2089,32 +2098,31 @@ class MLJob():
         dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
                                     RESULTS_PREFLIGHT_INPUT_RANGES_ELEMENT_NAME, resultStr)
 
-
-
         #############################
         # Write the derived training weights
-        classWeightsListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsPreflightXMLNode, 
-                                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
-        if (classWeightsListXMLNode is None):
-            return
-        dxml.XMLTools_RemoveAllChildNodes(classWeightsListXMLNode)
+        if (CALCULATE_TRAINING_WEIGHTS_DURING_PREFLIGHT):
+            classWeightsListXMLNode = dxml.XMLTools_GetOrCreateChildNode(self.ResultsPreflightXMLNode, 
+                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_LIST)
+            if (classWeightsListXMLNode is None):
+                return
+            dxml.XMLTools_RemoveAllChildNodes(classWeightsListXMLNode)
 
-        # Save the number of classes so we can easily rebuild the data structures when reading the job.
-        dxml.XMLTools_AddChildNodeWithText(classWeightsListXMLNode, 
-                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES, 
-                                            str(self.NumResultClasses))
-
-        # Make a new element for each resultClass weight
-        for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights):
-            resultClassXMLNode = dxml.XMLTools_AppendNewChildNode(classWeightsListXMLNode, 
-                                                            RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
-            dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
-                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE, 
-                                                str(classWeight))
-            dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
-                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, 
-                                                str(resultClassID))
-        # End - for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights.items())
+            # Save the number of classes so we can easily rebuild the data structures when reading the job.
+            dxml.XMLTools_AddChildNodeWithText(classWeightsListXMLNode, 
+                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_NUM_RESULT_CLASSES, 
+                                                str(self.NumResultClasses))
+            # Make a new element for each resultClass weight
+            for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights):
+                resultClassXMLNode = dxml.XMLTools_AppendNewChildNode(classWeightsListXMLNode, 
+                                                                RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT)
+                dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
+                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_WEIGHT_VALUE, 
+                                                    str(classWeight))
+                dxml.XMLTools_AddChildNodeWithText(resultClassXMLNode, 
+                                                    RESULTS_PREFLIGHT_TRAINING_PRIORITY_RESULT_CLASS_ID, 
+                                                    str(resultClassID))
+            # End - for resultClassID, classWeight in enumerate(self.PreflightResultClassWeights .items())
+        # End - if (CALCULATE_TRAINING_WEIGHTS_DURING_PREFLIGHT):
     # End - WritePreflightResultsToXML
 
 
@@ -2195,6 +2203,13 @@ class MLJob():
     # 
     #####################################################
     def ReadTestResultsFromXML(self, parentXMLNode):
+        self.NumResultsSubgroups = dxml.XMLTools_GetChildNodeTextAsInt(self.ResultXMLNode, 
+                                                    RESULTS_TEST_NUM_GROUPS_ELEMENT_NAME, 
+                                                    DEFAULT_NUM_TEST_SUBGROUPS)
+        self.SubgroupMeaning = dxml.XMLTools_GetChildNodeTextAsStr(self.ResultXMLNode, 
+                                                    RESULTS_TEST_GROUP_MEANING_XML_ELEMENT_NAME,
+                                                    DEFAULT_TEST_GROUP_MEANING)
+
         self.AllTestResults.ReadTestResultsFromXML()
         for index in range(self.NumResultsSubgroups):
             self.TestResultsSubgroupList[index].ReadTestResultsFromXML()
@@ -2207,6 +2222,13 @@ class MLJob():
     # 
     #####################################################
     def WriteTestResultsToXML(self, parentXMLNode):
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
+                            RESULTS_TEST_NUM_GROUPS_ELEMENT_NAME, 
+                            str(self.NumResultsSubgroups))
+        dxml.XMLTools_AddChildNodeWithText(parentXMLNode, 
+                            RESULTS_TEST_GROUP_MEANING_XML_ELEMENT_NAME,
+                            self.SubgroupMeaning)
+
         self.AllTestResults.WriteTestResultsToXML()
         for index in range(self.NumResultsSubgroups):
             self.TestResultsSubgroupList[index].WriteTestResultsToXML()
